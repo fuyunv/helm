@@ -2412,8 +2412,7 @@ ANY-KEYMAP ANY-DEFAULT ANY-HISTORY See `helm'."
       ;; before running helm will not start with its old value.
       (setq helm-pattern "")
       (setq helm--ignore-errors nil)
-      (helm-log-save-maybe)
-      (helm-cleanup-buffer-in-helm-internal any-buffer))))
+      (helm-log-save-maybe))))
 
 
 ;;; Helm resume
