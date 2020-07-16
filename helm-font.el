@@ -1,6 +1,6 @@
 ;;; helm-font --- Font and ucs selection for Helm -*- lexical-binding: t -*-
 
-;; Copyright (C) 2012 ~ 2018 Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Copyright (C) 2012 ~ 2019 Thierry Volpiatto <thierry.volpiatto@gmail.com>
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -23,7 +23,7 @@
 
 
 (defgroup helm-font nil
-  "Related applications to display fonts in helm."
+  "Related applications to display fonts in Helm."
   :group 'helm)
 
 (defcustom helm-ucs-recent-size 10
@@ -53,7 +53,9 @@
   "Keymap for `helm-ucs'.")
 
 (defface helm-ucs-char
-  '((((class color) (background dark))  (:foreground "Gold")))
+  `((((class color) (background dark))
+     ,@(and (>= emacs-major-version 27) '(:extend t))
+     :foreground "Gold"))
   "Face used to display ucs characters."
   :group 'helm-font)
 
@@ -111,7 +113,7 @@
            finally return (cons code char)))
 
 (defun helm-calculate-ucs-max-len ()
-  "Calculate the length of longest `ucs-names' candidate."
+  "Calculate the length of the longest `ucs-names' candidate."
   (let ((ucs-struct (ucs-names)))
     (if (hash-table-p ucs-struct)
         (helm-calculate-ucs-hash-table-max-len ucs-struct)
@@ -172,7 +174,7 @@ either be an alist or a hash-table."
     (helm-ucs-collect-symbols-alist ucs-struct)))
 
 (defun helm-ucs-init ()
-  "Initialize an helm buffer with ucs symbols.
+  "Initialize a Helm buffer with ucs symbols.
 Only math* symbols are collected."
   (unless helm-ucs--max-len
     (setq helm-ucs--max-len
@@ -185,7 +187,8 @@ Only math* symbols are collected."
 
 (defun helm-ucs-match (candidate n)
   "Return the N part of an ucs CANDIDATE.
-Where N=1 is the ucs code, N=2 the ucs char and N=3 the ucs name."
+Where N=1 is the ucs code, N=2 the ucs char and N=3 the ucs
+name."
   (when (string-match
          "^(\\(#x[a-f0-9]+\\)): *\\(.\\) *\\([^:]+\\)+"
          candidate)
@@ -285,7 +288,6 @@ Where N=1 is the ucs code, N=2 the ucs char and N=3 the ucs name."
     :candidates (lambda () helm-ucs-recent)
     :help-message helm-ucs-help-message
     :keymap helm-ucs-map
-    :match-part (lambda (candidate) (cadr (split-string candidate ":")))
     :volatile t))
 
 (defvar helm-source-ucs
@@ -293,7 +295,6 @@ Where N=1 is the ucs code, N=2 the ucs char and N=3 the ucs name."
     :data #'helm-ucs-init
     :get-line #'buffer-substring
     :help-message 'helm-ucs-help-message
-    :match-part (lambda (candidate) (cadr (split-string candidate ":")))
     :filtered-candidate-transformer
     (lambda (candidates _source) (sort candidates #'helm-generic-sort-fn))
     :action helm-ucs-actions
@@ -312,7 +313,7 @@ Where N=1 is the ucs code, N=2 the ucs char and N=3 the ucs name."
 
 ;;;###autoload
 (defun helm-ucs (arg)
-  "Preconfigured helm for `ucs-names'.
+  "Preconfigured `helm' for `ucs-names'.
 
 Called with a prefix arg force reloading cache."
   (interactive "P")

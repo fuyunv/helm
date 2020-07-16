@@ -1,6 +1,6 @@
 ;;; helm-id-utils.el --- Helm interface for id-utils. -*- lexical-binding: t -*-
 
-;; Copyright (C) 2015 ~ 2018 Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Copyright (C) 2015 ~ 2019 Thierry Volpiatto <thierry.volpiatto@gmail.com>
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -28,7 +28,7 @@
   "Name of gid command (usually `gid').
 For Mac OS X users, if you install GNU coreutils, the name `gid'
 might be occupied by `id' from GNU coreutils, and you should set
-it to correct name (or absolute path), for example, if using
+it to correct name (or absolute path).  For example, if using
 MacPorts to install id-utils, it should be `gid32'."
   :group 'helm-id-utils
   :type 'file)
@@ -61,7 +61,7 @@ MacPorts to install id-utils, it should be `gid32'."
                         '(" " mode-line-buffer-identification " "
                           (:eval (format "L%s" (helm-candidate-number-at-point))) " "
                           (:eval (propertize
-                                  (format "[Helm Gid process finished - (%s results)]" 
+                                  (format "[Helm Gid process finished - (%s results)]"
                                           (max (1- (count-lines
                                                     (point-min) (point-max)))
                                                0))
@@ -101,10 +101,10 @@ MacPorts to install id-utils, it should be `gid32'."
 
 ;;;###autoload
 (defun helm-gid ()
-  "Preconfigured helm for `gid' command line of `ID-Utils'.
-Need A database created with the command `mkid'
-above `default-directory'.
-Need id-utils as dependency which provide `mkid', `gid' etc...
+  "Preconfigured `helm' for `gid' command line of `ID-Utils'.
+Need A database created with the command `mkid' above
+`default-directory'.
+Need id-utils as dependency which provide `mkid', `gid' etc..
 See <https://www.gnu.org/software/idutils/>."
   (interactive)
   (let* ((db (locate-dominating-file

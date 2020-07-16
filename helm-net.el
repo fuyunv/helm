@@ -1,6 +1,6 @@
 ;;; helm-net.el --- helm browse url and search web. -*- lexical-binding: t -*-
 
-;; Copyright (C) 2012 ~ 2018 Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Copyright (C) 2012 ~ 2019 Thierry Volpiatto <thierry.volpiatto@gmail.com>
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -30,7 +30,7 @@
   :group 'helm)
 
 (defcustom helm-google-suggest-default-browser-function nil
-  "The browse url function you prefer to use with google suggest.
+  "The browse url function you prefer to use with Google suggest.
 When nil, use the first browser function available
 See `helm-browse-url-default-browser-alist'."
   :group 'helm-net
@@ -72,30 +72,16 @@ Otherwise `url-retrieve-synchronously' is used."
 
 (defcustom helm-surfraw-duckduckgo-url
   "https://duckduckgo.com/lite/?q=%s&kp=1"
-  "The duckduckgo url.
+  "The Duckduckgo url.
 This is a format string, don't forget the `%s'.
 If you have personal settings saved on duckduckgo you should have
 a personal url, see your settings on duckduckgo."
   :type 'string
   :group 'helm-net)
 
-(defcustom helm-wikipedia-suggest-url
-  "https://en.wikipedia.org/w/api.php?action=opensearch&search=%s"
-  "Url used for looking up Wikipedia suggestions.
-This is a format string, don't forget the `%s'."
-  :type 'string
-  :group 'helm-net)
-
 (defcustom helm-search-suggest-action-wikipedia-url
   "https://en.wikipedia.org/wiki/Special:Search?search=%s"
   "The Wikipedia search url.
-This is a format string, don't forget the `%s'."
-  :type 'string
-  :group 'helm-net)
-
-(defcustom helm-wikipedia-summary-url
-  "https://en.wikipedia.org/w/api.php?action=parse&format=json&prop=text&section=0&page=%s"
-  "URL for getting the summary of a Wikipedia topic.
 This is a format string, don't forget the `%s'."
   :type 'string
   :group 'helm-net)
@@ -162,12 +148,16 @@ Can be \"-new-tab\" (default) or \"-new-window\"."
           (const :tag "New tab" "-new-tab")
           (const :tag "New window" "-new-window")))
 
+(defcustom helm-net-curl-switches '("-s" "-L")
+  "Arguments list passed to curl when using `helm-net-prefer-curl'."
+  :group 'helm-net
+  :type '(repeat string))
 
 ;;; Additional actions for search suggestions
 ;;
 ;;
 ;; Internal
-
+(defvar helm-net-curl-log-file (expand-file-name "helm-curl.log" user-emacs-directory))
 (defun helm-search-suggest-perform-additional-action (url query)
   "Perform the search via URL using QUERY as input."
   (browse-url (format url (url-hexify-string query))))
@@ -175,7 +165,8 @@ Can be \"-new-tab\" (default) or \"-new-window\"."
 (defun helm-net--url-retrieve-sync (request parser)
   (if helm-net-prefer-curl
       (with-temp-buffer
-        (call-process "curl" nil t nil request)
+        (apply #'call-process "curl"
+               nil `(t ,helm-net-curl-log-file) nil request helm-net-curl-switches)
         (funcall parser))
       (with-current-buffer (url-retrieve-synchronously request)
         (funcall parser))))
@@ -201,7 +192,7 @@ Can be \"-new-tab\" (default) or \"-new-window\"."
      request #'helm-google-suggest-parser)))
 
 (defun helm-google-suggest-set-candidates (&optional request-prefix)
-  "Set candidates with result and number of google results found."
+  "Set candidates with result and number of Google results found."
   (let ((suggestions (helm-google-suggest-fetch
                       (or (and request-prefix
                                (concat request-prefix
@@ -232,7 +223,7 @@ Can be \"-new-tab\" (default) or \"-new-window\"."
     "?"))
 
 (defun helm-google-suggest-action (candidate)
-  "Default action to jump to a google suggested candidate."
+  "Default action to jump to a Google suggested candidate."
   (let ((arg (format helm-google-suggest-search-url
                      (url-hexify-string candidate))))
     (helm-aif helm-google-suggest-default-browser-function
@@ -241,7 +232,7 @@ Can be \"-new-tab\" (default) or \"-new-window\"."
 
 (defvar helm-google-suggest-default-function
   'helm-google-suggest-set-candidates
-  "Default function to use in helm google suggest.")
+  "Default function to use in `helm-google-suggest'.")
 
 (defvar helm-source-google-suggest
   (helm-build-sync-source "Google Suggest"
@@ -253,144 +244,8 @@ Can be \"-new-tab\" (default) or \"-new-window\"."
     :requires-pattern 3))
 
 (defun helm-google-suggest-emacs-lisp ()
-  "Try to emacs lisp complete with google suggestions."
+  "Try to emacs lisp complete with Google suggestions."
   (helm-google-suggest-set-candidates "emacs lisp"))
-
-;;; Wikipedia suggestions
-;;
-;;
-(declare-function json-read-from-string "json" (string))
-(defun helm-wikipedia-suggest-fetch ()
-  "Fetch Wikipedia suggestions and return them as a list."
-  (require 'json)
-  (let ((request (format helm-wikipedia-suggest-url
-                         (url-hexify-string helm-pattern))))
-    (helm-net--url-retrieve-sync
-     request #'helm-wikipedia--parse-buffer)))
-
-(defun helm-wikipedia--parse-buffer ()
-  (goto-char (point-min))
-  (when (re-search-forward "^\\[.+\\[\\(.*\\)\\]\\]" nil t)
-    (cl-loop for i across (aref (json-read-from-string (match-string 0)) 1)
-          collect i into result
-          finally return (or result
-                             (append
-                              result
-                              (list (cons (format "Search for '%s' on wikipedia"
-                                                  helm-pattern)
-                                          helm-pattern)))))))
-
-(defvar helm-wikipedia--summary-cache (make-hash-table :test 'equal))
-(defun helm-wikipedia-show-summary (input)
-  "Show Wikipedia summary for INPUT in new buffer."
-  (interactive)
-  (let ((buffer (get-buffer-create "*helm wikipedia summary*"))
-        (summary (helm-wikipedia--get-summary input)))
-    (with-current-buffer buffer
-      (visual-line-mode)
-      (erase-buffer)
-      (insert summary)
-      (pop-to-buffer (current-buffer))
-      (goto-char (point-min)))))
-
-(defun helm-wikipedia-persistent-action (candidate)
-  (unless (string= (format "Search for '%s' on wikipedia"
-                           helm-pattern)
-                   (helm-get-selection nil t))
-    (message "Fetching summary from Wikipedia...")
-    (let ((buf (get-buffer-create "*helm wikipedia summary*"))
-          (result (helm-wikipedia--get-summary candidate)))
-      (with-current-buffer buf
-        (erase-buffer)
-        (setq cursor-type nil)
-        (insert result)
-        (fill-region (point-min) (point-max))
-        (goto-char (point-min)))
-      (display-buffer buf))))
-
-(defun helm-wikipedia--get-summary (input)
-  "Return Wikipedia summary for INPUT as string.
-Follows any redirections from Wikipedia, and stores results in
-`helm-wikipedia--summary-cache'."
-  (let (result)
-    (while (progn
-             (setq result (or (gethash input helm-wikipedia--summary-cache)
-                              (puthash input
-                                       (helm-wikipedia--fetch-summary input)
-                                       helm-wikipedia--summary-cache)))
-             (when (and result
-                        (listp result))
-               (setq input (cdr result))
-               (message "Redirected to %s" input)
-               t)))
-    (unless result
-      (error "Error when getting summary."))
-    result))
-
-(defun helm-wikipedia--fetch-summary (input)
-  (let* ((request (format helm-wikipedia-summary-url
-                          (url-hexify-string input))))
-    (helm-net--url-retrieve-sync
-     request #'helm-wikipedia--parse-summary)))
-
-(defun helm-wikipedia--parse-summary ()
-  (goto-char (point-min))
-  (when (search-forward "{" nil t)
-    (let ((result (cdr (assq '*
-                              (assq 'text
-                                     (assq 'parse
-                                            (json-read-from-string
-                                             (buffer-substring-no-properties
-                                              (1- (point)) (point-max)))))))))
-      (when result
-        (if (string-match "<span class=\"redirectText\"><a href=[^>]+>\\([^<]+\\)" result)
-            (cons 'redirect (match-string 1 result))
-
-          ;; find the beginning of the summary text in the result
-
-          ;; check if there is a table before the summary and skip that
-          (when (or (string-match "</table>\\(\n<div.*?</div>\\)?\n<p>" result)
-                    ;; otherwise just find the first paragraph
-                    (string-match "<p>" result))
-            ;; remove cruft and do a simple formatting 
-            (replace-regexp-in-string
-             "Cite error: .*" ""
-             (replace-regexp-in-string
-              "&#160;" ""
-              (replace-regexp-in-string
-               "\\[[^\]]+\\]" ""
-               (replace-regexp-in-string
-                "<[^>]*>" ""
-                (replace-regexp-in-string
-                 "</p>\n<p>" "\n\n"
-                 (substring result (match-end 0)))))))))))))
-
-
-(defvar helm-wikipedia-map
-  (let ((map (copy-keymap helm-map)))
-    (define-key map (kbd "<C-return>") 'helm-wikipedia-show-summary-action)
-    map)
-  "Keymap for `helm-wikipedia-suggest'.")
-
-(defvar helm-source-wikipedia-suggest
-  (helm-build-sync-source "Wikipedia Suggest"
-    :candidates #'helm-wikipedia-suggest-fetch
-    :action '(("Wikipedia" . (lambda (candidate)
-                               (helm-search-suggest-perform-additional-action
-                                helm-search-suggest-action-wikipedia-url
-                                candidate)))
-              ("Show summary in new buffer (C-RET)" . helm-wikipedia-show-summary))
-    :persistent-action #'helm-wikipedia-persistent-action
-    :persistent-help "show summary"
-    :volatile t
-    :keymap helm-wikipedia-map
-    :requires-pattern 3))
-
-(defun helm-wikipedia-show-summary-action ()
-  "Exit Helm buffer and call `helm-wikipedia-show-summary' with selected candidate."
-  (interactive)
-  (with-helm-alive-p
-    (helm-exit-and-execute-action 'helm-wikipedia-show-summary)))
 
 
 ;;; Web browser functions.
@@ -402,6 +257,7 @@ Follows any redirections from Wikipedia, and stores results in
 
 (defvar helm-browse-url-chromium-program "chromium-browser")
 (defvar helm-browse-url-uzbl-program "uzbl-browser")
+(defvar helm-browse-url-next-program "next")
 (defvar helm-browse-url-conkeror-program "conkeror")
 (defvar helm-browse-url-opera-program "opera")
 (defvar helm-browse-url-default-browser-alist
@@ -436,12 +292,12 @@ Follows any redirections from Wikipedia, and stores results in
 
 ;;;###autoload
 (defun helm-browse-url-firefox (url &optional _ignore)
-  "Same as `browse-url-firefox' but detach from emacs.
+  "Same as `browse-url-firefox' but detach from Emacs.
 
-So when you quit emacs you can keep your firefox session open
-and not be prompted to kill firefox process.
+So when you quit Emacs you can keep your Firefox session open and
+not be prompted to kill the Firefox process.
 
-NOTE: Probably not supported on some systems (e.g Windows)."
+NOTE: Probably not supported on some systems (e.g., Windows)."
   (interactive (list (read-string "URL: " (browse-url-url-at-point))
                      nil))
   (setq url (browse-url-encode-url url))
@@ -454,12 +310,12 @@ NOTE: Probably not supported on some systems (e.g Windows)."
 
 ;;;###autoload
 (defun helm-browse-url-opera (url &optional _ignore)
-  "Browse URL with opera browser and detach from emacs.
+  "Browse URL with Opera browser and detach from Emacs.
 
-So when you quit emacs you can keep your opera session open
-and not be prompted to kill opera process.
+So when you quit Emacs you can keep your Opera session open and
+not be prompted to kill the Opera process.
 
-NOTE: Probably not supported on some systems (e.g Windows)."
+NOTE: Probably not supported on some systems (e.g., Windows)."
   (interactive (list (read-string "URL: " (browse-url-url-at-point))
                      nil))
   (setq url (browse-url-encode-url url))
@@ -470,7 +326,7 @@ NOTE: Probably not supported on some systems (e.g Windows)."
 
 ;;;###autoload
 (defun helm-browse-url-chromium (url &optional _ignore)
-  "Browse URL with google chrome browser."
+  "Browse URL with Google Chrome browser."
   (interactive "sURL: ")
   (helm-generic-browser
    url helm-browse-url-chromium-program))
@@ -486,6 +342,12 @@ NOTE: Probably not supported on some systems (e.g Windows)."
   "Browse URL with conkeror browser."
   (interactive "sURL: ")
   (helm-generic-browser url helm-browse-url-conkeror-program))
+
+;;;###autoload
+(defun helm-browse-url-next (url &optional _ignore)
+  "Browse URL with next browser."
+  (interactive "sURL: ")
+  (helm-generic-browser url helm-browse-url-next-program))
 
 (defun helm-browse-url-default-browser (url &rest args)
   "Find the first available browser and ask it to load URL."
@@ -561,17 +423,9 @@ NOTE: Probably not supported on some systems (e.g Windows)."
 
 ;;;###autoload
 (defun helm-google-suggest ()
-  "Preconfigured `helm' for google search with google suggest."
+  "Preconfigured `helm' for Google search with Google suggest."
   (interactive)
   (helm-other-buffer 'helm-source-google-suggest "*helm google*"))
-
-;;;###autoload
-(defun helm-wikipedia-suggest ()
-  "Preconfigured `helm' for Wikipedia lookup with Wikipedia suggest."
-  (interactive)
-  (helm :sources 'helm-source-wikipedia-suggest
-        :buffer "*helm wikipedia*"))
-
 
 (provide 'helm-net)
 

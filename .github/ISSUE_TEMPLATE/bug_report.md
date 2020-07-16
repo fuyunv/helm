@@ -1,3 +1,12 @@
+---
+name: Bug report
+about: Create a report to help us improve
+title: ''
+labels: ''
+assignees: ''
+
+---
+
 ## Expected behavior
 
 ## Actual behavior (from `emacs-helm.sh` if possible, see note at the bottom)
@@ -20,14 +29,7 @@ environment: no other packages and only minimal settings.
 When possible, use it to reproduce your Helm issue to ensure no other package is
 interfering.
 
-To run it, simply switch to the directory where Helm is installed and
-call `./emacs-helm.sh`.  If necessary you can specify emacs executable
-path on command line with "-P" option.  For people using straight to
-manage their packages you have to specify the path to you emacs-async
-installation:
-
-cd ~/.emacs.d/straight/repos/helm
-EMACSLOADPATH="../emacs-async:" ./emacs-helm.sh 
-
+To run it, simply switch to the directory where Helm is installed and call `./emacs-helm.sh`.
+If necessary you can specify emacs executable path on command line with "-P" option.
 
 Thanks.

@@ -1,6 +1,6 @@
 ;;; helm-utils.el --- Utilities Functions for helm. -*- lexical-binding: t -*-
 
-;; Copyright (C) 2012 ~ 2018 Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Copyright (C) 2012 ~ 2019 Thierry Volpiatto <thierry.volpiatto@gmail.com>
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -24,6 +24,12 @@
 
 (declare-function helm-find-files-1 "helm-files.el" (fname &optional preselect))
 (declare-function popup-tip "ext:popup")
+(declare-function markdown-show-subtree "outline.el")
+(declare-function outline-show-subtree "outline.el")
+(declare-function org-reveal "org.el")
+(declare-function tab-bar-tabs "tab-bar.el")
+(declare-function tab-bar-select-tab "tab-bar.el")
+(defvar org-directory)
 (defvar winner-boring-buffers)
 (defvar helm-show-completion-overlay)
 
@@ -70,11 +76,11 @@ It is a float, usually 1024.0 but could be 1000.0 on some systems."
   :type '(repeat (choice string)))
 
 (defcustom helm-html-decode-entities-function #'helm-html-decode-entities-string
-  "Function used to decode html entities in html bookmarks.
+  "Function used to decode HTML entities in HTML bookmarks.
 Helm comes by default with `helm-html-decode-entities-string', if you need something
 more sophisticated you can use `w3m-decode-entities-string' if available.
 
-In emacs itself org-entities seems broken and `xml-substitute-numeric-entities'
+In Emacs itself org-entities seem broken and `xml-substitute-numeric-entities'
 supports only numeric entities."
   :group 'helm-utils
   :type 'function)
@@ -82,17 +88,17 @@ supports only numeric entities."
 
 (defvar helm-goto-line-before-hook '(helm-save-current-pos-to-mark-ring)
   "Run before jumping to line.
-This hook run when jumping from `helm-goto-line', `helm-etags-default-action',
+This hook runs when jumping from `helm-goto-line', `helm-etags-default-action',
 and `helm-imenu-default-action'.
-This allow you to retrieve a previous position after using the different helm
+This allows you to retrieve a previous position after using the different helm
 tools for searching (etags, grep, gid, (m)occur etc...).
-By default positions are added to `mark-ring' you can also add to register
-by using instead (or adding) `helm-save-pos-to-register-before-jump'.
-In this case last position is added to the register
-`helm-save-pos-before-jump-register'.")
+By default positions are added to `mark-ring'.
+You can also add to register by using (or adding)
+`helm-save-pos-to-register-before-jump' instead. In this case
+last position is added to the register `helm-save-pos-before-jump-register'.")
 
 (defvar helm-save-pos-before-jump-register ?_
-  "The register where `helm-save-pos-to-register-before-jump' save position.")
+  "The register where `helm-save-pos-to-register-before-jump' saves position.")
 
 (defconst helm-html-entities-alist
   '(("&quot;"   . 34)   ;; "
@@ -200,18 +206,20 @@ In this case last position is added to the register
   "Table of html character entities and values.")
 
 (defvar helm-find-many-files-after-hook nil
-  "Hook that run at end of `helm-find-many-files'.")
+  "Hook that runs at end of `helm-find-many-files'.")
 
 ;;; Faces.
 ;;
 (defface helm-selection-line
-    '((t (:inherit highlight :distant-foreground "black")))
-  "Face used in the `helm-current-buffer' when jumping to candidate."
+  `((t ,@(and (>= emacs-major-version 27) '(:extend t))
+       :inherit highlight :distant-foreground "black"))
+  "Face used in the `helm-current-buffer' when jumping to a candidate."
   :group 'helm-faces)
 
 (defface helm-match-item
-    '((t (:inherit isearch)))
-  "Face used to highlight item matched in a selected line."
+  `((t ,@(and (>= emacs-major-version 27) '(:extend t))
+       :inherit isearch))
+  "Face used to highlight the item matched in a selected line."
   :group 'helm-faces)
 
 
@@ -230,7 +238,7 @@ according to the setting of `split-width-threshold' and the size of
 the window from where splitting is done.
 
 Note that when using `decide' and `split-width-threshold' is nil, the
-behavior is the same that with a nil value."
+behavior is the same as with a nil value."
   :group 'helm-utils
   :type '(choice
            (const :tag "Split window vertically" t)
@@ -252,8 +260,8 @@ It is typically used to rearrange windows."
 (defun helm-window-show-buffers (buffers &optional other-window)
   "Show BUFFERS.
 
-If more than one buffer marked switch to these buffers in separate windows.
-If OTHER-WINDOW is non-nil, keep current buffer and switch to others buffers
+With more than one buffer marked switch to these buffers in separate windows.
+If OTHER-WINDOW is non-nil, keep current buffer and switch to other buffers
 in separate windows.
 If a prefix arg is given split windows vertically."
   (let ((initial-ow-fn (if (cdr (window-list))
@@ -264,7 +272,42 @@ If a prefix arg is given split windows vertically."
                  (and other-window initial-ow-fn))
       (if other-window
           (funcall initial-ow-fn (car buffers))
-        (switch-to-buffer (car buffers))))))
+        (helm-buffers-switch-to-buffer-or-tab (car buffers))))))
+
+(defvar tab-bar-tab-name-function)
+(declare-function tab-bar-switch-to-tab "tab-bar.el")
+(declare-function tab-bar-tab-name-all "tab-bar.el")
+
+(defun helm-buffers-switch-to-buffer-or-tab (buffer)
+  "Switch to BUFFER in its tab if some."
+  (if (and (fboundp 'tab-bar-mode)
+           helm-buffers-maybe-switch-to-tab)
+      (let* ((tab-bar-tab-name-function #'tab-bar-tab-name-all)
+             (tabs (tab-bar-tabs))
+             (tab-names (mapcar (lambda (tab)
+                                  (cdr (assq 'name tab)))
+                                tabs))
+             (bname (buffer-name (get-buffer buffer)))
+             (tab (helm-buffers--get-tab-from-name bname tabs)))
+        (if (helm-buffers--buffer-in-tab-p bname tab-names)
+            (progn
+              (tab-bar-switch-to-tab (alist-get 'name tab))
+              (select-window (get-buffer-window bname)))
+          (switch-to-buffer buffer)))
+    (switch-to-buffer buffer)))
+
+(defun helm-buffers--get-tab-from-name (tab-name tabs)
+  "Return tab from TABS when it contains TAB-NAME."
+  (cl-loop for tab in tabs
+           when (member tab-name (split-string (cdr (assq 'name tab)) ", " t))
+           return tab))
+
+(defun helm-buffers--buffer-in-tab-p (buffer-name tab-names)
+  "Check if BUFFER-NAME is in TAB-NAMES list."
+  (cl-loop for name in tab-names
+           ;; Buf names are separated with "," in TAB-NAMES
+           ;; e.g. '("tab-bar.el" "*scratch*, helm-buffers.el").
+           thereis (member buffer-name (split-string name ", " t))))
 
 (defun helm-window-default-split-fn (candidates &optional other-window-fn)
   "Split windows in one direction and balance them.
@@ -405,12 +448,17 @@ Default is `helm-current-buffer'."
 
 (defun helm-goto-char (loc)
   "Go to char, revealing if necessary."
-  (require 'org) ; On some old Emacs versions org may not be loaded.
   (goto-char loc)
-  (let ((fn (cond ((eq major-mode 'org-mode) #'org-reveal)
+  (let ((fn (cond ((eq major-mode 'org-mode)
+                   ;; On some old Emacs versions org may not be loaded.
+                   (require 'org)
+                   #'org-reveal)
                   ((and (boundp 'outline-minor-mode)
                         outline-minor-mode)
-                   (lambda () (outline-flag-subtree nil))))))
+                   #'outline-show-subtree)
+                  ((and (boundp 'markdown-mode-map)
+                        (derived-mode-p 'markdown-mode))
+                   #'markdown-show-subtree))))
     ;; outline may fail in some conditions e.g. with markdown enabled
     ;; (issue #1919).
     (condition-case nil
@@ -422,8 +470,9 @@ Default is `helm-current-buffer'."
 Animation is used unless NOANIM is non--nil."
   (helm-log-run-hook 'helm-goto-line-before-hook)
   (helm-match-line-cleanup)
-  (with-helm-current-buffer
-    (unless helm-yank-point (setq helm-yank-point (point))))
+  (unless helm-alive-p
+    (with-helm-current-buffer
+      (unless helm-yank-point (setq helm-yank-point (point)))))
   (goto-char (point-min))
   (helm-goto-char (point-at-bol lineno))
   (unless noanim
@@ -444,17 +493,24 @@ To use this add it to `helm-goto-line-before-hook'."
       (set-marker (mark-marker) (point))
       (push-mark (point) 'nomsg))))
 
-(defun helm-show-all-in-this-source-only (arg)
-  "Show only current source of this helm session with all its candidates.
-With a numeric prefix arg show only the ARG number of candidates."
+(defun helm-show-all-candidates-in-source (arg)
+  "Toggle all or only candidate-number-limit cands in current source.
+With a numeric prefix arg show only the ARG number of candidates.
+The prefix arg has no effect when toggling to only
+candidate-number-limit."
   (interactive "p")
   (with-helm-alive-p
-    (with-helm-window
-      (with-helm-default-directory (helm-default-directory)
-          (let ((helm-candidate-number-limit (and (> arg 1) arg)))
-            (helm-set-source-filter
-             (list (assoc-default 'name (helm-get-current-source)))))))))
-(put 'helm-show-all-in-this-source-only 'helm-only t)
+    (with-helm-buffer
+      (if helm-source-filter
+          (progn
+            (setq-local helm-candidate-number-limit
+                        (default-value 'helm-candidate-number-limit))
+            (helm-set-source-filter nil))
+        (with-helm-default-directory (helm-default-directory)
+          (setq-local helm-candidate-number-limit (and (> arg 1) arg))
+          (helm-set-source-filter
+           (list (helm-get-current-source))))))))
+(put 'helm-show-all-candidates-in-source 'helm-only t)
 
 (defun helm-display-all-sources ()
   "Display all sources previously hidden by `helm-set-source-filter'."
@@ -489,6 +545,7 @@ from its directory."
   (with-helm-alive-p
     (require 'helm-grep)
     (require 'helm-elisp)
+    (require 'bookmark) ; For bookmark-alist
     (helm-run-after-exit
      (lambda (f)
        ;; Ensure specifics `helm-execute-action-at-once-if-one'
@@ -504,15 +561,20 @@ from its directory."
                                       (helm-basename f) f))))
              (helm-find-files-1 f))))
      (let* ((sel       (helm-get-selection))
-            (marker    (if (consp sel) (markerp (cdr sel))))
+            (marker    (and (consp sel) (markerp (cdr sel))))
             (grep-line (and (stringp sel)
                             (helm-grep-split-line sel)))
+            (occur-fname (helm-aand (numberp sel)
+                                    (helm-attr 'buffer-name)
+                                    (buffer-file-name (get-buffer it))))
             (bmk-name  (and (stringp sel)
                             (not grep-line)
                             (replace-regexp-in-string "\\`\\*" "" sel)))
             (bmk       (and bmk-name (assoc bmk-name bookmark-alist)))
             (buf       (helm-aif (and (bufferp sel) (get-buffer sel))
                            (buffer-name it)))
+            (pkg       (and (stringp sel)
+                            (get-text-property 0 'tabulated-list-id sel)))
             (default-preselection (or (buffer-file-name helm-current-buffer)
                                       default-directory)))
        (cond
@@ -542,9 +604,11 @@ from its directory."
          ((and grep-line (file-exists-p (car grep-line)))
           (expand-file-name (car grep-line)))
          ;; Occur.
-         (grep-line
-          (with-current-buffer (get-buffer (car grep-line))
-            (expand-file-name (or (buffer-file-name) default-directory))))
+         ((and occur-fname (file-exists-p occur-fname))
+          (expand-file-name occur-fname))
+         ;; Package (installed).
+         ((and pkg (package-installed-p pkg))
+          (expand-file-name (package-desc-dir pkg)))
          ;; Url.
          ((and (stringp sel) helm--url-regexp (string-match helm--url-regexp sel)) sel)
          ;; Exit brutally from a `with-helm-show-completion'
@@ -565,7 +629,8 @@ that is sorting is done against real value of candidate."
          (reg1  (concat "\\_<" qpattern "\\_>"))
          (reg2  (concat "\\_<" qpattern))
          (reg3  helm-pattern)
-         (split (helm-mm-split-pattern helm-pattern))
+         (split (helm-remove-if-match
+                 "\\`!" (helm-mm-split-pattern helm-pattern)))
          (str1  (if (consp s1) (cdr s1) s1))
          (str2  (if (consp s2) (cdr s2) s2))
          (score (lambda (str r1 r2 r3 lst)
@@ -575,25 +640,31 @@ that is sorting is done against real value of candidate."
                                    (string-match
                                     (concat "\\_<" (regexp-quote (car lst))) str)
                                    (cl-loop for r in (cdr lst)
-                                            always (string-match r str))) 4)
+                                            always (string-match r str)))
+                              4)
                              ((and (string-match " " qpattern)
                                    (cl-loop for r in lst
-                                            always (string-match r str))) 3)
+                                            always (string-match r str)))
+                              3)
                              ((string-match r2 str) 2)
                              ((string-match r3 str) 1)
                              (t 0)))))
-         (sc1 (funcall score str1 reg1 reg2 reg3 split))
-         (sc2 (funcall score str2 reg1 reg2 reg3 split)))
-    (cond ((or (zerop (string-width qpattern))
-               (and (zerop sc1) (zerop sc2)))
+         (sc1 (get-text-property 0 'completion-score str1))
+         (sc2 (get-text-property 0 'completion-score str2))
+         (sc3 (if sc1 0 (funcall score str1 reg1 reg2 reg3 split)))
+         (sc4 (if sc2 0 (funcall score str2 reg1 reg2 reg3 split))))
+    (cond ((and sc1 sc2) ; helm-flex style.
+           (> sc1 sc2))
+          ((or (zerop (string-width qpattern))
+               (and (zerop sc3) (zerop sc4)))
            (string-lessp str1 str2))
-          ((= sc1 sc2)
+          ((= sc3 sc4)
            (< (length str1) (length str2)))
-          (t (> sc1 sc2)))))
+          (t (> sc3 sc4)))))
 
 (cl-defun helm-file-human-size (size &optional (kbsize helm-default-kbsize))
   "Return a string showing SIZE of a file in human readable form.
-SIZE can be an integer or a float depending it's value.
+SIZE can be an integer or a float depending on it's value.
 `file-attributes' will take care of that to avoid overflow error.
 KBSIZE is a floating point number, defaulting to `helm-default-kbsize'."
   (cl-loop with result = (cons "B" size)
@@ -601,9 +672,27 @@ KBSIZE is a floating point number, defaulting to `helm-default-kbsize'."
            while (>= (cdr result) kbsize)
            do (setq result (cons i (/ (cdr result) kbsize)))
            finally return
-           (pcase (car result)
-             (`"B" (format "%s" size))
-             (suffix (format "%.1f%s" (cdr result) suffix)))))
+           (helm-acase (car result)
+             ("B" (format "%s" size))
+             (t (format "%.1f%s" (cdr result) it)))))
+
+(defun helm-directory-size (directory &optional recursive human)
+  "Return the resulting size of the sum of all files in DIRECTORY.
+
+If RECURSIVE is non nil return the size of all files in DIRECTORY and
+its subdirectories.  With arg HUMAN format the size in a human
+readable format,see `helm-file-human-size'."
+  (cl-loop with files = (if recursive
+                            (helm-walk-directory
+                             directory
+                             :path 'full
+                             :directories t)
+                          (directory-files directory t))
+           for file in files
+           sum (nth 7 (file-attributes file)) into total
+           finally return (if human
+                              (helm-file-human-size total)
+                            total)))
 
 (cl-defun helm-file-attributes
     (file &key type links uid gid access-time modif-time
@@ -722,8 +811,9 @@ Inlined here for compatibility."
 
 (defmacro with-helm-display-marked-candidates (buffer-or-name candidates &rest body)
   (declare (indent 0) (debug t))
-  (helm-with-gensyms (buffer window)
+  (helm-with-gensyms (buffer window winconf)
     `(let* ((,buffer (temp-buffer-window-setup ,buffer-or-name))
+            (,winconf helm-last-frame-or-window-configuration)
             (helm-always-two-windows t)
             (helm-split-window-default-side
              (if (eq helm-split-window-default-side 'same)
@@ -740,7 +830,8 @@ Inlined here for compatibility."
                                '(display-buffer-below-selected
                                  (window-height . fit-window-to-buffer))))
               (progn ,@body))
-         (quit-window 'kill ,window)))))
+         (quit-window 'kill ,window)
+         (and ,winconf (set-window-configuration ,winconf))))))
 
 ;;; Persistent Action Helpers
 ;;
@@ -755,7 +846,9 @@ Inlined here for compatibility."
          (end (or end (1+ (line-end-position))))
          start-match end-match
          (args (list start end buf))
-         (case-fold-search (helm-set-case-fold-search)))
+         (case-fold-search (if helm-alive-p
+                               (helm-set-case-fold-search)
+                             case-fold-search)))
     ;; Highlight the current line.
     (if (not helm-match-line-overlay)
         (setq helm-match-line-overlay (apply 'make-overlay args))
@@ -913,8 +1006,8 @@ Assume regexp is a pcre based regexp."
                      file))))
 
 (defun helm-open-dired (file)
-  "Opens a dired buffer in FILE's directory.  If FILE is a
-directory, open this directory."
+  "Open a dired buffer in FILE's directory.
+If FILE is a directory, open this directory."
   (if (file-directory-p file)
       (dired file)
     (dired (file-name-directory file))
@@ -943,7 +1036,7 @@ directory, open this directory."
 
 (defun helm-find-many-files (_ignore)
   "Simple action that run `find-file' on marked candidates.
-Run `helm-find-many-files-after-hook' at end"
+Run `helm-find-many-files-after-hook' at end."
   (let ((helm--reading-passwd-or-string t))
     (mapc 'find-file (helm-marked-candidates))
     (helm-log-run-hook 'helm-find-many-files-after-hook)))
@@ -960,7 +1053,7 @@ If COUNT is non--nil add a number after each prompt."
         finally return (remove "" lis)))
 
 (defun helm-html-bookmarks-to-alist (file url-regexp bmk-regexp)
-  "Parse html bookmark FILE and return an alist with (title . url) as elements."
+  "Parse HTML bookmark FILE and return an alist with (title . url) as elements."
   (let (bookmarks-alist url title)
     (with-temp-buffer
       (insert-file-contents file)
@@ -978,7 +1071,7 @@ If COUNT is non--nil add a number after each prompt."
     (nreverse bookmarks-alist)))
 
 (defun helm-html-entity-to-string (entity)
-  "Replace an html ENTITY by its string value.
+  "Replace an HTML ENTITY with its string value.
 When unable to decode ENTITY returns nil."
   (helm-aif (assoc entity helm-html-entities-alist)
       (string (cdr it))
