@@ -2283,10 +2283,6 @@ However, the use of non-keyword args is deprecated.
                           ;; take precedence on same vars
                           ;; that may have been passed before helm call.
                           (helm-parse-keys plist)))
-            (message "helm--local-variables: %S" helm--local-variables)
-            (message "helm-argument-keys: %S" helm-argument-keys)
-            (message "plist: %S" plist)
-            (message "fn: %S" fn)
             (apply fn (mapcar (lambda (key) (plist-get plist key))
                               helm-argument-keys)))
         (apply fn plist))))) ; [1] fn == helm-internal.
@@ -2333,8 +2329,6 @@ example, :candidate-number-limit is bound to
   "The internal helm function called by `helm'.
 For ANY-SOURCES ANY-INPUT ANY-PROMPT ANY-RESUME ANY-PRESELECT ANY-BUFFER and
 ANY-KEYMAP ANY-DEFAULT ANY-HISTORY See `helm'."
-  ;; 第二次调用helm 会转发到 helm-internal
-  (message "in helm internal: (any-sources any-input any-prompt any-resume any-preselect any-buffer    any-keymap any-default any-history): %S" (list any-sources any-input any-prompt any-resume any-preselect any-buffer any-keymap any-default any-history))
   (unless helm--nested (setq helm-initial-frame (selected-frame)))
   ;; Activate the advices.
   ;; Advices will be available only in >=emacs-24.4, but
