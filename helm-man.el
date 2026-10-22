@@ -1,6 +1,6 @@
 ;;; helm-man.el --- Man and woman UI -*- lexical-binding: t -*-
 
-;; Copyright (C) 2012 ~ 2019 Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Copyright (C) 2012 ~ 2026 Thierry Volpiatto
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -25,12 +25,14 @@
 (defvar woman-manpath)
 (defvar woman-path)
 (defvar woman-expanded-directory-path)
+(defvar warning-suppress-log-types)
 (declare-function woman-file-name "woman.el" (topic &optional re-cache))
 (declare-function woman-file-name-all-completions "woman.el" (topic))
 (declare-function Man-getpage-in-background "man.el" (topic))
 (declare-function woman-expand-directory-path "woman.el" (path-dirs path-regexps))
 (declare-function woman-topic-all-completions "woman.el" (path))
 (declare-function helm-generic-sort-fn "helm-utils.el" (S1 S2))
+(declare-function helm-comp-read "helm-mode")
 
 (defgroup helm-man nil
   "Man and Woman applications for Helm."
@@ -57,6 +59,10 @@ Arguments are passed to `manual-entry' with `format.'"
 Will be calculated the first time you invoke Helm with this
 source.")
 
+(defvar helm-source-man-pages nil)
+
+(defvar helm-man--tldr-cache nil)
+
 (defun helm-man-default-action (candidate)
   "Default action for jumping to a woman or man page from Helm."
   (let ((wfiles (mapcar #'car (woman-file-name-all-completions candidate))))
@@ -79,8 +85,13 @@ source.")
              (Man-getpage-in-background candidate)))))
 
 (defun helm-man--init ()
-  (require 'woman)
+  "Init caches for helm-man."
+  (require 'warnings)
+  (let ((warning-suppress-log-types '((defvaralias))))
+    (require 'woman))
   (require 'helm-utils)
+  (unless helm-man--tldr-cache
+    (setq helm-man--tldr-cache (helm-man--tldr-cache)))
   (unless helm-man--pages
     (setq woman-expanded-directory-path
           (woman-expand-directory-path woman-manpath woman-path))
@@ -89,31 +100,77 @@ source.")
     (setq helm-man--pages (mapcar 'car woman-topic-all-completions)))
   (helm-init-candidates-in-buffer 'global helm-man--pages))
 
-(defvar helm-source-man-pages
-  (helm-build-in-buffer-source "Manual Pages"
-    :init #'helm-man--init
-    :persistent-action #'ignore
-    :filtered-candidate-transformer
-     (lambda (candidates _source)
-       (sort candidates #'helm-generic-sort-fn))
-    :action  '(("Display Man page" . helm-man-default-action))
-    :group 'helm-man))
+(defun helm-man-popup-info (candidate)
+  "The popup-info function for `helm-man-pages-class'."
+  ;; On some systems mandb don't run automatically, in this case whatis or man
+  ;; -f may return nothing.
+  (let ((output (shell-command-to-string (format "man -f '%s'" candidate))))
+    (when (string-match (format "\\(%s ?([^(]+)\\) *- ?\\(.*\\)\n" candidate)
+                        output)
+      (match-string 2 output))))
+
+(defun helm-man-tldr-render (command)
+  "Display the output of `tldr' command."
+  (with-current-buffer-window "*tldr*" '(display-buffer-full-frame) nil
+    (let ((status (call-process "tldr" nil t nil "--color" "always" command))
+          map)
+      (when (zerop status)
+        (ansi-color-apply-on-region (point-min) (point-max))
+        (goto-char (point-min))
+        (setq map (let ((m (make-sparse-keymap)))
+                    (define-key m (kbd "<return>") #'browse-url-at-point)
+                    (define-key m [mouse-1] #'browse-url-at-point)
+                    m))
+        (save-excursion
+          (while (re-search-forward "http[s]://" nil t)
+            (let* ((pos (bounds-of-thing-at-point 'url))
+                   (ov (make-overlay (car pos) (cdr pos))))
+              (overlay-put ov 'face 'font-lock-keyword-face)
+              (overlay-put ov 'keymap map)
+              (overlay-put ov 'mouse-face 'highlight)
+              (overlay-put ov 'help-echo "mouse-1: Browse url"))))
+      (local-set-key "q" 'quit-window)))))
+
+(defun helm-man--tldr-cache ()
+  "Return the output of tldr -l as a list."
+  (when (executable-find "tldr")
+    (with-temp-buffer
+      (call-process "tldr" nil t nil "-l")
+      (split-string (buffer-string) "\n"))))
+
+(defun helm-man-action-transformer (actions _candidate)
+  "The action transformer fn for `helm-man-woman'."
+  (let ((disp (helm-get-selection nil t)))
+    (if (member disp helm-man--tldr-cache)
+        (append actions '(("Tldr" . helm-man-tldr-render)))
+      actions)))
+
+(defclass helm-man-pages-class (helm-source-in-buffer)
+  ((popup-info :initform #'helm-man-popup-info)))
 
 ;;;###autoload
 (defun helm-man-woman (arg)
   "Preconfigured `helm' for Man and Woman pages.
-With a prefix arg reinitialize the cache."
+With a prefix ARG reinitialize the cache.  To have a popup
+showing a basic description of selected candidate, turn on
+`helm-popup-tip-mode'."
   (interactive "P")
-  (when arg (setq helm-man--pages nil))
-    (helm :sources 'helm-source-man-pages
-          :buffer "*helm man woman*"))
+  (when arg (setq helm-man--pages nil
+                  helm-man--tldr-cache nil))
+  (unless helm-source-man-pages
+    (setq helm-source-man-pages
+          (helm-make-source "Manual Pages" 'helm-man-pages-class
+            :init #'helm-man--init
+            :persistent-action #'ignore
+            :filtered-candidate-transformer
+            (lambda (candidates _source)
+              (sort candidates #'helm-generic-sort-fn))
+            :action-transformer 'helm-man-action-transformer
+            :action  '(("Display Man page" . helm-man-default-action))
+            :group 'helm-man)))
+  (helm :sources 'helm-source-man-pages
+        :buffer "*helm man woman*"))
 
 (provide 'helm-man)
-
-;; Local Variables:
-;; byte-compile-warnings: (not obsolete)
-;; coding: utf-8
-;; indent-tabs-mode: nil
-;; End:
 
 ;;; helm-man.el ends here

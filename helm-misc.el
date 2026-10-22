@@ -1,6 +1,6 @@
 ;;; helm-misc.el --- Various functions for helm -*- lexical-binding: t -*-
 
-;; Copyright (C) 2012 ~ 2019 Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Copyright (C) 2012 ~ 2026 Thierry Volpiatto
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -26,6 +26,11 @@
 (declare-function LaTeX-math-mode "ext:latex.el")
 (declare-function jabber-chat-with "ext:jabber.el")
 (declare-function jabber-read-account "ext:jabber.el")
+(declare-function helm-comp-read "helm-mode")
+(declare-function outline-back-to-heading "outline.el")
+(declare-function outline-end-of-heading  "outline.el")
+(declare-function helm-goto-char "helm-utils")
+(declare-function helm-highlight-current-line "helm-utils")
 
 
 (defgroup helm-misc nil
@@ -38,8 +43,8 @@
   :type 'string)
 
 (defcustom helm-timezone-actions
-  '(("Set timezone env (TZ)" . (lambda (candidate)
-                                 (setenv "TZ" candidate))))
+  `(("Set timezone env (TZ)" . ,(lambda (candidate)
+                                  (setenv "TZ" candidate))))
   "Actions for helm-timezone."
   :group 'helm-misc
   :type '(alist :key-type string :value-type function))
@@ -171,22 +176,6 @@
     :action 'helm-timezone-actions
     :filtered-candidate-transformer 'helm-time-zone-transformer))
 
-;;; Commands
-;;
-(defun helm-call-interactively (cmd-or-name)
-  "Execute CMD-OR-NAME as Emacs command.
-It is added to `extended-command-history'.
-`helm-current-prefix-arg' is used as the command's prefix argument."
-  (setq extended-command-history
-        (cons (helm-stringify cmd-or-name)
-              (delete (helm-stringify cmd-or-name) extended-command-history)))
-  (let ((current-prefix-arg helm-current-prefix-arg)
-        (cmd (helm-symbolify cmd-or-name)))
-    (if (stringp (symbol-function cmd))
-        (execute-kbd-macro (symbol-function cmd))
-      (setq this-command cmd)
-      (call-interactively cmd))))
-
 ;;; Minibuffer History
 ;;
 ;;
@@ -197,12 +186,74 @@ It is added to `extended-command-history'.
     map))
 
 (defcustom helm-minibuffer-history-must-match t
-  "Allow inserting non matching elements when nil or 'confirm."
+  "Allow inserting non matching elements when nil or \\='confirm."
   :group 'helm-misc
   :type '(choice
           (const :tag "Must match" t)
-          (const :tag "Confirm" 'confirm)
+          (const :tag "Confirm" confirm)
           (const :tag "Always allow" nil)))
+
+(defcustom helm-minibuffer-history-key "C-r"
+  "The key `helm-minibuffer-history' is bound to in minibuffer local maps."
+  :type '(choice (string :tag "Key") (const :tag "no binding"))
+  :group 'helm-mode)
+
+(defconst helm-minibuffer-history-old-key
+  (cl-loop for map in '(minibuffer-local-completion-map
+                        minibuffer-local-filename-completion-map
+                        minibuffer-local-filename-must-match-map ; Emacs 23.1.+
+                        minibuffer-local-isearch-map
+                        minibuffer-local-map
+                        minibuffer-local-must-match-filename-map ; Older Emacsen
+                        minibuffer-local-must-match-map
+                        minibuffer-local-ns-map)
+           when (and (boundp map) (symbol-value map))
+           collect (cons map (lookup-key (symbol-value map) "\C-r"))))
+
+;;;###autoload
+(define-minor-mode helm-minibuffer-history-mode
+    "Bind `helm-minibuffer-history-key' in al minibuffer maps.
+This mode is enabled by `helm-mode', so there is no need to enable it directly."
+  :group 'helm-misc
+  :global t
+  (if helm-minibuffer-history-mode
+      (let ((key helm-minibuffer-history-key))
+        (dolist (map '(minibuffer-local-completion-map
+                          minibuffer-local-filename-completion-map
+                          minibuffer-local-filename-must-match-map ; Emacs 23.1.+
+                          minibuffer-local-isearch-map
+                          minibuffer-local-map
+                          minibuffer-local-must-match-filename-map ; Older Emacsen
+                          minibuffer-local-must-match-map
+                          minibuffer-local-ns-map))
+          (let ((vmap (and (boundp map) (symbol-value map))))
+            (when (keymapp vmap)
+              (let ((val (and (boundp 'helm-minibuffer-history-key)
+                              (symbol-value 'helm-minibuffer-history-key))))
+                (when val
+                  (define-key vmap
+                      (if (stringp val) (read-kbd-macro val) val)
+                    nil)))
+              (when key
+                (define-key (symbol-value map)
+                    (if (stringp key) (read-kbd-macro key) key)
+                  'helm-minibuffer-history))))))
+    (dolist (map '(minibuffer-local-completion-map
+                      minibuffer-local-filename-completion-map
+                      minibuffer-local-filename-must-match-map
+                      minibuffer-local-isearch-map
+                      minibuffer-local-map
+                      minibuffer-local-must-match-filename-map
+                      minibuffer-local-must-match-map
+                      minibuffer-local-ns-map))
+      (let ((vmap (and (boundp map) (symbol-value map))))
+        (when (keymapp vmap)
+          (let ((val (and (boundp 'helm-minibuffer-history-key)
+                          (symbol-value 'helm-minibuffer-history-key))))
+            (when val
+              (define-key vmap
+                (if (stringp val) (read-kbd-macro val) val)
+                (assoc-default map helm-minibuffer-history-old-key)))))))))
 
 
 ;;; Helm ratpoison UI
@@ -266,27 +317,27 @@ It is added to `extended-command-history'.
   "Preconfigured `helm' to show world time.
 Default action change TZ environment variable locally to emacs."
   (interactive)
-  (helm-other-buffer 'helm-source-time-world "*helm world time*"))
+  (helm :sources 'helm-source-time-world :buffer "*helm world time*"))
 
 ;;;###autoload
 (defun helm-insert-latex-math ()
   "Preconfigured helm for latex math symbols completion."
   (interactive)
-  (helm-other-buffer 'helm-source-latex-math "*helm latex*"))
+  (helm :sources 'helm-source-latex-math :buffer "*helm latex*"))
 
 ;;;###autoload
 (defun helm-ratpoison-commands ()
   "Preconfigured `helm' to execute ratpoison commands."
   (interactive)
-  (helm-other-buffer 'helm-source-ratpoison-commands
-                     "*helm ratpoison commands*"))
+  (helm :sources 'helm-source-ratpoison-commands
+        :buffer "*helm ratpoison commands*"))
 
 ;;;###autoload
 (defun helm-stumpwm-commands()
   "Preconfigured helm for stumpwm commands."
   (interactive)
-  (helm-other-buffer 'helm-source-stumpwm-commands
-                     "*helm stumpwm commands*"))
+  (helm :sources 'helm-source-stumpwm-commands
+        :buffer "*helm stumpwm commands*"))
 
 ;;;###autoload
 (defun helm-minibuffer-history ()
@@ -300,7 +351,7 @@ Default action change TZ environment variable locally to emacs."
          (elm (helm-comp-read "Next element matching (regexp): "
                               (cl-loop for i in
                                        (symbol-value minibuffer-history-variable)
-                                       unless (string= "" i) collect i into history
+                                       unless (equal "" i) collect i into history
                                        finally return
                                        (if (consp (car history))
                                            (mapcar 'prin1-to-string history)
@@ -311,9 +362,9 @@ Default action change TZ environment variable locally to emacs."
                               :buffer "*helm minibuffer-history*"
                               :must-match helm-minibuffer-history-must-match
                               :multiline t
-                              :keymap helm-minibuffer-history-map
+                              :keymap 'helm-minibuffer-history-map
                               :allow-nest t)))
-    ;; Fix issue #1667 with emacs-25+ `query-replace-from-to-separator'.
+    ;; Fix Bug#1667 with emacs-25+ `query-replace-from-to-separator'.
     (when (and (boundp 'query-replace-from-to-separator) query-replace-p)
       (let ((pos (string-match "\0" elm)))
         (and pos
@@ -324,12 +375,40 @@ Default action change TZ environment variable locally to emacs."
     (delete-minibuffer-contents)
     (insert elm)))
 
-(provide 'helm-misc)
+;;;###autoload
+(defun helm-outline (&optional arg)
+  "Basic helm navigation tool for outline buffers."
+  (interactive "P")
+  (require 'outline)
+  (let ((outline-regexp (replace-regexp-in-string
+                          "\\`\\^" ""
+                          (if arg
+                              (read-regexp "Outline regexp")
+                            outline-regexp))))
+    (helm :sources (helm-build-sync-source "helm outline"
+                     :candidates
+                     (lambda ()
+                       (with-helm-current-buffer
+                         (save-excursion
+                           (goto-char (point-min))
+                           (cl-loop while (re-search-forward (concat "^" outline-regexp) nil t)
+                                    for beg = (match-beginning 0)
+                                    for end = (progn
+                                                (outline-end-of-heading) (point))
+                                    collect
+                                    (cons (buffer-substring beg end) beg)))))
+                     :action (lambda (pos)
+                               (helm-goto-char pos)
+                               (helm-highlight-current-line)))
+          :preselect (save-excursion
+                       (when (condition-case _err
+                                 (outline-back-to-heading)
+                               (error nil))
+                         (regexp-quote
+                          (buffer-substring
+                           (point) (progn (outline-end-of-heading) (point))))))
+          :buffer "*helm outline*")))
 
-;; Local Variables:
-;; byte-compile-warnings: (not obsolete)
-;; coding: utf-8
-;; indent-tabs-mode: nil
-;; End:
+(provide 'helm-misc)
 
 ;;; helm-misc.el ends here

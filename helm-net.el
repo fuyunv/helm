@@ -1,6 +1,6 @@
 ;;; helm-net.el --- helm browse url and search web. -*- lexical-binding: t -*-
 
-;; Copyright (C) 2012 ~ 2019 Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Copyright (C) 2012 ~ 2026 Thierry Volpiatto
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -23,6 +23,8 @@
 (require 'url)
 (require 'xml)
 (require 'browse-url)
+
+(declare-function helm-comp-read "helm-mode")
 
 
 (defgroup helm-net nil
@@ -115,38 +117,40 @@ This is a format string, don't forget the `%s'."
   :group 'helm-net)
 
 (defcustom helm-google-suggest-actions
-  '(("Google Search" . helm-google-suggest-action)
-    ("Wikipedia" . (lambda (candidate)
-                     (helm-search-suggest-perform-additional-action
-                      helm-search-suggest-action-wikipedia-url
-                      candidate)))
-    ("Youtube" . (lambda (candidate)
+  (helm-make-actions
+   "Google Search" 'helm-google-suggest-action
+   "Wikipedia" (lambda (candidate)
+                 (helm-search-suggest-perform-additional-action
+                  helm-search-suggest-action-wikipedia-url
+                  candidate))
+   "Youtube" (lambda (candidate)
+               (helm-search-suggest-perform-additional-action
+                helm-search-suggest-action-youtube-url
+                candidate))
+   "IMDb" (lambda (candidate)
+            (helm-search-suggest-perform-additional-action
+             helm-search-suggest-action-imdb-url
+             candidate))
+   "Google Maps" (lambda (candidate)
                    (helm-search-suggest-perform-additional-action
-                    helm-search-suggest-action-youtube-url
+                    helm-search-suggest-action-google-maps-url
+                    candidate))
+   "Google News" (lambda (candidate)
+                   (helm-search-suggest-perform-additional-action
+                    helm-search-suggest-action-google-news-url
                     candidate)))
-    ("IMDb" . (lambda (candidate)
-                (helm-search-suggest-perform-additional-action
-                 helm-search-suggest-action-imdb-url
-                 candidate)))
-    ("Google Maps" . (lambda (candidate)
-                       (helm-search-suggest-perform-additional-action
-                        helm-search-suggest-action-google-maps-url
-                        candidate)))
-    ("Google News" . (lambda (candidate)
-                       (helm-search-suggest-perform-additional-action
-                        helm-search-suggest-action-google-news-url
-                        candidate))))
   "List of actions for google suggest sources."
   :group 'helm-net
   :type '(alist :key-type string :value-type function))
 
-(defcustom helm-browse-url-firefox-new-window "-new-tab"
+(defcustom helm-browse-url-firefox-new-window "--new-tab"
   "Allow choosing to browse url in new window or new tab.
-Can be \"-new-tab\" (default) or \"-new-window\"."
+Can be \"--new-tab\" (default), \"--new-window\" or \"--private-window\"."
   :group 'helm-net
   :type '(radio
-          (const :tag "New tab" "-new-tab")
-          (const :tag "New window" "-new-window")))
+          (const :tag "New tab" "--new-tab")
+          (const :tag "New window" "--new-window")
+          (const :tag "New private window" "--private-window")))
 
 (defcustom helm-net-curl-switches '("-s" "-L")
   "Arguments list passed to curl when using `helm-net-prefer-curl'."
@@ -239,8 +243,8 @@ Can be \"-new-tab\" (default) or \"-new-window\"."
     :candidates (lambda ()
                   (funcall helm-google-suggest-default-function))
     :action 'helm-google-suggest-actions
-    :volatile t
-    :keymap helm-map
+    :match-dynamic t
+    :keymap 'helm-map
     :requires-pattern 3))
 
 (defun helm-google-suggest-emacs-lisp ()
@@ -256,29 +260,32 @@ Can be \"-new-tab\" (default) or \"-new-window\"."
 ;; also `helm-browse-url-default-browser-alist'.
 
 (defvar helm-browse-url-chromium-program "chromium-browser")
+(defvar helm-browse-url-brave-program "brave-browser")
 (defvar helm-browse-url-uzbl-program "uzbl-browser")
-(defvar helm-browse-url-next-program "next")
+(defvar helm-browse-url-nyxt-program "nyxt")
 (defvar helm-browse-url-conkeror-program "conkeror")
 (defvar helm-browse-url-opera-program "opera")
+(defvar helm-browse-url-w3m-program (or (and (boundp 'w3m-command) w3m-command)
+                                        (executable-find "w3m")))
 (defvar helm-browse-url-default-browser-alist
-  `((,(or (and (boundp 'w3m-command) w3m-command)
-          "/usr/bin/w3m") . w3m-browse-url)
-    (,browse-url-firefox-program . browse-url-firefox)
-    (,helm-browse-url-chromium-program . helm-browse-url-chromium)
-    (,helm-browse-url-conkeror-program . helm-browse-url-conkeror)
-    (,helm-browse-url-opera-program . helm-browse-url-opera)
-    (,helm-browse-url-uzbl-program . helm-browse-url-uzbl)
-    (,browse-url-kde-program . browse-url-kde)
-    (,browse-url-gnome-moz-program . browse-url-gnome-moz)
-    (,browse-url-mozilla-program . browse-url-mozilla)
-    (,browse-url-galeon-program . browse-url-galeon)
-    (,browse-url-netscape-program . browse-url-netscape)
-    (,browse-url-mosaic-program . browse-url-mosaic)
-    (,browse-url-xterm-program . browse-url-text-xterm)
+  '((helm-browse-url-w3m-program . w3m-browse-url)
+    (browse-url-firefox-program . browse-url-firefox)
+    (helm-browse-url-chromium-program . helm-browse-url-chromium)
+    (helm-browse-url-brave-program . helm-browse-url-brave)
+    (helm-browse-url-conkeror-program . helm-browse-url-conkeror)
+    (helm-browse-url-opera-program . helm-browse-url-opera)
+    (helm-browse-url-uzbl-program . helm-browse-url-uzbl)
+    (helm-browse-url-nyxt-program . helm-browse-url-nyxt)
+    (browse-url-kde-program . browse-url-kde)
+    (browse-url-gnome-moz-program . browse-url-gnome-moz)
+    (browse-url-mozilla-program . browse-url-mozilla)
+    (browse-url-galeon-program . browse-url-galeon)
+    (browse-url-netscape-program . browse-url-netscape)
+    (browse-url-xterm-program . browse-url-text-xterm)
     ("emacs" . eww-browse-url))
-  "*Alist of \(executable . function\) to try to find a suitable url browser.")
+  "Alist of (browse_url_variable . function) to try to find a suitable url browser.")
 
-(cl-defun helm-generic-browser (url cmd-name &rest args)
+(defun helm-generic-browser (url cmd-name &rest args)
   "Browse URL with NAME browser."
   (let ((proc (concat cmd-name " " url)))
     (message "Starting %s..." cmd-name)
@@ -290,6 +297,24 @@ Can be \"-new-tab\" (default) or \"-new-window\"."
          (when (string= event "finished\n")
            (message "%s process %s" process event))))))
 
+(defun helm-browse-url-detached (cmd url &optional new-tab)
+  "Browse URL with browser CMD and detach it from Emacs.
+
+NEW-TAB is the command line argument supported by CMD e.g. \"--new-tab\".
+
+So when you quit Emacs you can keep your browser session open and
+not be prompted to kill the browser process.
+
+NOTE: Probably not supported on some systems (e.g., Windows)."
+  (setq url (browse-url-encode-url url))
+  (setq new-tab (if (stringp new-tab)
+                       (concat " " (replace-regexp-in-string
+                                    " " "" new-tab))
+                     ""))
+  (let ((process-environment (browse-url-process-environment)))
+    (call-process-shell-command
+     (format "(%s%s %s &)" cmd new-tab (shell-quote-argument url)))))
+
 ;;;###autoload
 (defun helm-browse-url-firefox (url &optional _ignore)
   "Same as `browse-url-firefox' but detach from Emacs.
@@ -300,13 +325,10 @@ not be prompted to kill the Firefox process.
 NOTE: Probably not supported on some systems (e.g., Windows)."
   (interactive (list (read-string "URL: " (browse-url-url-at-point))
                      nil))
-  (setq url (browse-url-encode-url url))
-  (let ((process-environment (browse-url-process-environment)))
-    (call-process-shell-command
-     (format "(%s %s %s &)"
-             browse-url-firefox-program
-             helm-browse-url-firefox-new-window
-             (shell-quote-argument url)))))
+  (cl-assert (executable-find browse-url-firefox-program)
+             nil "couldn't find firefox executable")
+  (helm-browse-url-detached browse-url-firefox-program url
+                            helm-browse-url-firefox-new-window))
 
 ;;;###autoload
 (defun helm-browse-url-opera (url &optional _ignore)
@@ -318,18 +340,39 @@ not be prompted to kill the Opera process.
 NOTE: Probably not supported on some systems (e.g., Windows)."
   (interactive (list (read-string "URL: " (browse-url-url-at-point))
                      nil))
-  (setq url (browse-url-encode-url url))
-  (let ((process-environment (browse-url-process-environment)))
-    (call-process-shell-command
-     (format "(%s %s &)"
-             helm-browse-url-opera-program (shell-quote-argument url)))))
+  (helm-browse-url-detached helm-browse-url-opera-program url))
 
 ;;;###autoload
 (defun helm-browse-url-chromium (url &optional _ignore)
-  "Browse URL with Google Chrome browser."
-  (interactive "sURL: ")
-  (helm-generic-browser
-   url helm-browse-url-chromium-program))
+  "Same as `browse-url-chromium' but detach from emacs.
+
+So when you quit Emacs you can keep your Chromium session open and
+not be prompted to kill the Chromium process.
+
+NOTE: Probably not supported on some systems (e.g., Windows)."
+  (interactive (list (read-string "URL: " (browse-url-url-at-point))
+                     nil))
+  (cl-assert (executable-find helm-browse-url-chromium-program)
+             nil "couldn't find chromium executable")
+  (helm-browse-url-detached
+   helm-browse-url-chromium-program url))
+
+;;;###autoload
+(defun helm-browse-url-brave (url &optional _ignore)
+  "Browse URL with Brave browser and detach from emacs.
+
+Brave browser executable is determined by `helm-browse-url-brave-program'.
+
+So when you quit Emacs you can keep your Opera session open and
+not be prompted to kill the Opera process.
+
+NOTE: Probably not supported on some systems (e.g., Windows)."
+  (interactive (list (read-string "URL: " (browse-url-url-at-point))
+                     nil))
+  (cl-assert (executable-find helm-browse-url-brave-program)
+             nil "couldn't find brave executable")
+  (helm-browse-url-detached
+   helm-browse-url-brave-program url "--new-tab"))
 
 ;;;###autoload
 (defun helm-browse-url-uzbl (url &optional _ignore)
@@ -344,16 +387,19 @@ NOTE: Probably not supported on some systems (e.g., Windows)."
   (helm-generic-browser url helm-browse-url-conkeror-program))
 
 ;;;###autoload
-(defun helm-browse-url-next (url &optional _ignore)
-  "Browse URL with next browser."
+(defun helm-browse-url-nyxt (url &optional _ignore)
+  "Browse URL with nyxt browser."
   (interactive "sURL: ")
-  (helm-generic-browser url helm-browse-url-next-program))
+  (helm-generic-browser url helm-browse-url-nyxt-program))
 
 (defun helm-browse-url-default-browser (url &rest args)
   "Find the first available browser and ask it to load URL."
   (let ((default-browser-fn
-         (cl-loop for (exe . fn) in helm-browse-url-default-browser-alist
-               thereis (and exe (executable-find exe) (fboundp fn) fn))))
+         (cl-loop for (var . fn) in helm-browse-url-default-browser-alist
+                  for exe = (if (stringp var)
+                                var
+                              (and (boundp var) (symbol-value var)))
+                  thereis (and exe (executable-find exe) (fboundp fn) fn))))
     (if default-browser-fn
         (apply default-browser-fn url args)
       (error "No usable browser found"))))
@@ -401,8 +447,7 @@ NOTE: Probably not supported on some systems (e.g., Windows)."
      (helm-build-elvi-list)
      :must-match t
      :name "Surfraw Search Engines"
-     :del-input nil
-     :history helm-surfraw-engines-history)))
+     :history 'helm-surfraw-engines-history)))
   (let* ((engine-nodesc (car (split-string engine)))
          (url (if (string= engine-nodesc "duckduckgo")
                   ;; "sr duckduckgo -p foo" is broken, workaround.
@@ -417,22 +462,14 @@ NOTE: Probably not supported on some systems (e.g., Windows)."
                                           browse-url-browser-function)))
     (if (string= engine-nodesc "W")
         (helm-browse-url helm-home-url)
-      (helm-browse-url url)
-      (setq helm-surfraw-engines-history
-            (cons engine (delete engine helm-surfraw-engines-history))))))
+      (helm-browse-url url))))
 
 ;;;###autoload
 (defun helm-google-suggest ()
   "Preconfigured `helm' for Google search with Google suggest."
   (interactive)
-  (helm-other-buffer 'helm-source-google-suggest "*helm google*"))
+  (helm :sources 'helm-source-google-suggest :buffer "*helm google*"))
 
 (provide 'helm-net)
-
-;; Local Variables:
-;; byte-compile-warnings: (not obsolete)
-;; coding: utf-8
-;; indent-tabs-mode: nil
-;; End:
 
 ;;; helm-net.el ends here

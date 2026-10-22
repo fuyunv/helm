@@ -26,7 +26,7 @@
 EMACS_COMMAND   := emacs
 
 # Use -q to have /usr/local/share/emacs/site-lisp and subdirs in load-path
-EMACS		:= $(EMACS_COMMAND) -q -batch
+EMACS		:= "$(EMACS_COMMAND)" -q -batch
 
 EVAL := $(EMACS) --eval
 
@@ -57,7 +57,7 @@ ASYNC_STRAIGHT_DIR  =  $(shell \
 	find -L $(STRAIGHT_DIR) -maxdepth 1 -regex '.*/async' 2> /dev/null | \
 	sort | tail -n 1)
 ifneq "$(ASYNC_STRAIGHT_DIR)" ""
-	LOADPATH += -L $(ASYNC_STRAIGHT_DIR)
+	LOADPATH += -L "$(ASYNC_STRAIGHT_DIR)"
 endif
 
 # Files to compile
@@ -79,6 +79,7 @@ compile: $(ELC)
 
 # Compile all files at once
 batch-compile:
+	@echo Compiling helm with $(EMACS_COMMAND)
 	$(EMACS) $(LOADPATH) -f batch-byte-compile $(EL)
 
 # Remove all generated files
@@ -88,7 +89,7 @@ clean:
 # Make autoloads file
 autoloads:
 	$(EVAL) "(progn (setq generated-autoload-file (expand-file-name \"helm-autoloads.el\" \"$(PKGDIR)\")) \
-(setq backup-inhibited t) (update-directory-autoloads \"$(PKGDIR)\"))"
+(setq backup-inhibited t) (if (< emacs-major-version 29) (update-directory-autoloads \"$(PKGDIR)\") (loaddefs-generate \"$(PKGDIR)\" generated-autoload-file nil nil nil t)))"
 
 PREFIX=/usr/local/
 BIN=${PREFIX}bin/

@@ -1,6 +1,6 @@
 ;;; helm-dabbrev.el --- Helm implementation of dabbrev. -*- lexical-binding: t -*-
 
-;; Copyright (C) 2012 ~ 2019 Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Copyright (C) 2012 ~ 2026 Thierry Volpiatto
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -31,7 +31,6 @@
 Note that even if nil, a search in all buffers will occur if the
 length of candidates is <= than
 `helm-dabbrev-max-length-result'."
-  :group 'helm-dabbrev
   :type 'boolean)
 
 (defcustom helm-dabbrev-candidates-number-limit 1000
@@ -45,26 +44,23 @@ Note that this have nothing to do with
 candidates stop when this value is reached but only
 `helm-candidate-number-limit' candidates are displayed in the
 Helm buffer."
-  :group 'helm-dabbrev
   :type 'integer)
 
 (defcustom helm-dabbrev-ignored-buffers-regexps
   '("\\*helm" "\\*Messages" "\\*Echo Area" "\\*Buffer List")
   "List of regexps matching names of buffers that `helm-dabbrev' should not check."
-  :group 'helm-dabbrev
   :type '(repeat regexp))
 
 (defcustom helm-dabbrev-related-buffer-fn #'helm-dabbrev--same-major-mode-p
   "A function that decide if a buffer to search in its related to `current-buffer'.
 
-This is actually determined by comparing `major-mode' of the
+This is currently determined by comparing `major-mode' of the
 buffer to search and the `current-buffer'.
 
 The function take one arg, the buffer which is current, look at
 `helm-dabbrev--same-major-mode-p' for an example.
 
 When nil all buffers are considered related to `current-buffer'."
-  :group 'helm-dabbrev
   :type 'function)
 
 (defcustom helm-dabbrev-major-mode-assoc nil
@@ -72,30 +68,27 @@ When nil all buffers are considered related to `current-buffer'."
 
 This allow helm-dabbrev searching in buffers with the associated
 `major-mode'.
-E.g. \(emacs-lisp-mode . lisp-interaction-mode\)
+E.g. (emacs-lisp-mode . lisp-interaction-mode)
 
 will allow searching in the lisp-interaction-mode buffer when
 `current-buffer' is an `emacs-lisp-mode' buffer and vice versa
-i.e. no need to provide \(lisp-interaction-mode .
-emacs-lisp-mode\) association.
+i.e. no need to provide (lisp-interaction-mode .
+emacs-lisp-mode) association.
 
 When nil check is the searched buffer has same `major-mode' than
 the `current-buffer'.
 
 This has no effect when `helm-dabbrev-related-buffer-fn' is nil
 or of course bound to a function that doesn't handle this var."
-  :type '(alist :key-type symbol :value-type symbol)
-  :group 'helm-dabbrev)
+  :type '(alist :key-type symbol :value-type symbol))
 
 (defcustom helm-dabbrev-lineno-around 30
   "Search first in this number of lines before and after point."
-  :group 'helm-dabbrev
   :type 'integer)
 
 (defcustom helm-dabbrev-cycle-threshold 5
   "Number of time helm-dabbrev cycle before displaying helm completion.
 When nil or 0 disable cycling."
-  :group 'helm-dabbrev
   :type '(choice (const :tag "Cycling disabled" nil) integer))
 
 (defcustom helm-dabbrev-case-fold-search 'smart
@@ -103,25 +96,24 @@ When nil or 0 disable cycling."
 Same as `helm-case-fold-search' but for `helm-dabbrev'.
 Note that this is not affecting searching in Helm buffer, but the
 initial search for all candidates in buffer(s)."
-  :group 'helm-dabbrev
   :type '(choice (const :tag "Ignore case" t)
           (const :tag "Respect case" nil)
-          (other :tag "Smart" 'smart)))
+          (other :tag "Smart" smart)))
 
 (defvaralias 'helm-dabbrev--regexp 'helm-dabbrev-separator-regexp)
 (make-obsolete-variable 'helm-dabbrev--regexp
                         'helm-dabbrev-separator-regexp "2.8.3")
 ;; Check for beginning of line should happen last (^\n\\|^).
 (defvar helm-dabbrev-separator-regexp
-  "\\s-\\|\t\\|[(\\[\\{\"'`=<$;,@.#+]\\|\\s\\\\|^\n\\|^"
+  "\\s-\\|\t\\|[(\\[\\{\"'`=<>$;,@.#+]\\|\\s\\\\|^\n\\|^"
   "Regexp matching the start of a dabbrev candidate.")
 
 
 (defvar helm-dabbrev-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map helm-map)
-    (define-key map (kbd "M-/") 'helm-next-line)
-    (define-key map (kbd "M-:") 'helm-previous-line)
+    (define-key map (kbd "M-/") #'helm-next-line)
+    (define-key map (kbd "M-:") #'helm-previous-line)
     map))
 
 ;; Internal
@@ -245,7 +237,7 @@ The search starts at (1- BEG) with a regexp starting with
 regexp matching syntactically any word or symbol.
 The possible false positives matching SEP-REGEXP at end are
 finally removed."
-  (let ((eol (point-at-eol)))
+  (let ((eol (pos-eol)))
     (save-excursion
       (goto-char (1- beg))
       (when (re-search-forward
@@ -277,7 +269,7 @@ finally removed."
            (end (point)))
       (run-with-timer
        0.01 nil
-       'helm-insert-completion-at-point
+       #'helm-insert-completion-at-point
        beg end candidate))))
 
 ;;;###autoload
@@ -380,7 +372,7 @@ finally removed."
                            helm-dabbrev--already-tried)
                           :persistent-action 'ignore
                           :persistent-help "DoNothing"
-                          :keymap helm-dabbrev-map
+                          :keymap 'helm-dabbrev-map
                           :action 'helm-dabbrev-default-action
                           :group 'helm-dabbrev)
                         :buffer "*helm dabbrev*"
@@ -392,11 +384,5 @@ finally removed."
                       helm-dabbrev--cache           nil)))))))))
 
 (provide 'helm-dabbrev)
-
-;; Local Variables:
-;; byte-compile-warnings: (not obsolete)
-;; coding: utf-8
-;; indent-tabs-mode: nil
-;; End:
 
 ;;; helm-dabbrev.el ends here

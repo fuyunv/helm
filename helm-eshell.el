@@ -1,6 +1,6 @@
 ;;; helm-eshell.el --- pcomplete and eshell completion for helm. -*- lexical-binding: t -*-
 
-;; Copyright (C) 2012 ~ 2019 Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Copyright (C) 2012 ~ 2026 Thierry Volpiatto
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -40,8 +40,12 @@
 (declare-function eshell-backward-argument "esh-mode" (&optional arg))
 (declare-function helm-quote-whitespace "helm-lib")
 (declare-function eshell-skip-prompt "em-prompt")
-(defvar eshell-special-chars-outside-quoting)
+(declare-function eshell-read-history "em-hist")
+(declare-function eshell-get-history "em-hist")
 
+(defvar eshell-special-chars-outside-quoting)
+(defvar eshell-history-ring)
+(defvar eshell-hist-ignoredups)
 
 (defgroup helm-eshell nil
   "Helm completion and history for Eshell."
@@ -50,21 +54,20 @@
 
 (defcustom helm-eshell-fuzzy-match nil
   "Enable fuzzy matching in `helm-esh-pcomplete' when non-nil."
-  :group 'helm-eshell
   :type 'boolean)
 
 
 (defvar helm-eshell-history-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map helm-map)
-    (define-key map (kbd "M-p") 'helm-next-line)
+    (define-key map (kbd "M-p") #'helm-next-line)
     map)
   "Keymap for `helm-eshell-history'.")
 
 (defvar helm-esh-completion-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map helm-map)
-    (define-key map (kbd "TAB") 'helm-next-line)
+    (define-key map (kbd "TAB") #'helm-next-line)
     map)
   "Keymap for `helm-esh-pcomplete'.")
 
@@ -92,7 +95,7 @@ at point."
         (lambda (x)
           (cond ((string-match "\\`~/" helm-ec-target)
                  ;; Strip out the first escape char added by
-                 ;; `comint-quote-filename' before "~" (Issue #1803).
+                 ;; `comint-quote-filename' before "~" (Bug#1803).
                  (substring (comint-quote-filename (abbreviate-file-name x)) 1))
                 ((string-match "\\`/" helm-ec-target)
                  (comint-quote-filename x))
@@ -116,7 +119,7 @@ at point."
          (t
           (file-relative-name i)))
    into lst
-   finally return (sort lst 'helm-generic-sort-fn)))
+   finally return (sort lst #'helm-generic-sort-fn)))
 
 (defclass helm-esh-source (helm-source-sync)
   ((init :initform (lambda ()
@@ -154,15 +157,18 @@ at point."
               with comps = (all-completions pcomplete-stub table)
               unless comps return (prog1 nil
                                     ;; Don't add final space when
-                                    ;; there is no completion (issue #1990).
+                                    ;; there is no completion (Bug#1990).
                                     (setq helm-eshell--quit-flag t)
                                     (message "No completions of %s" pcomplete-stub))
               for i in comps
-              ;; Transform the related names to abs names.
+              ;; Transform the relative names to abs names.
               for file-cand = (and exp-entry
                                    (if (file-remote-p i) i
                                      (expand-file-name
-                                      i (file-name-directory entry))))
+                                      i (file-name-directory
+                                         (if (directory-name-p pcomplete-stub)
+                                             entry
+                                           (directory-file-name entry))))))
               ;; Compare them to avoid dups.
               for file-entry-p = (and (stringp exp-entry)
                                       (stringp file-cand)
@@ -194,20 +200,26 @@ at point."
 ;;; Eshell history.
 ;;
 ;;
+(defun helm-eshell-history-candidates ()
+  (require 'em-hist)
+  (eshell-read-history)
+  (with-helm-current-buffer
+    (cl-loop for c from 0 to (ring-length eshell-history-ring)
+             for elm = (eshell-get-history c)
+             unless (and (member elm lst)
+                         eshell-hist-ignoredups)
+             collect elm into lst
+             finally return lst)))
+
 (defclass helm-eshell-history-source (helm-source-sync)
   ((init :initform
          (lambda ()
            ;; Same comment as in `helm-source-esh'.
            (remove-hook 'minibuffer-setup-hook 'eshell-mode)))
-   (candidates
-    :initform
-    (lambda ()
-      (with-helm-current-buffer
-        (cl-loop for c from 0 to (ring-length eshell-history-ring)
-                 collect (eshell-get-history c)))))
+   (candidates :initform #'helm-eshell-history-candidates)
    (nomark :initform t)
    (multiline :initform t)
-   (keymap :initform helm-eshell-history-map)
+   (keymap :initform 'helm-eshell-history-map)
    (candidate-number-limit :initform 9999)
    (action :initform (lambda (candidate)
                        (eshell-kill-input)
@@ -219,7 +231,7 @@ at point."
   (if (and (stringp last)
            (not (string= last ""))
            (not users-comp)
-           ;; Fix completion on "../" see #1832.
+           ;; Fix completion on "../" see Bug#1832.
            (or (file-exists-p last)
                (helm-aand
                 (file-name-directory last)
@@ -238,7 +250,8 @@ at point."
 (defun helm-esh-pcomplete-default-source ()
   "Make and return the default source for Eshell completion."
   (helm-make-source "Eshell completions" 'helm-esh-source
-    :fuzzy-match helm-eshell-fuzzy-match))
+    :fuzzy-match helm-eshell-fuzzy-match
+    :keymap 'helm-esh-completion-map))
 
 (defvar helm-esh-pcomplete-build-source-fn #'helm-esh-pcomplete-default-source
   "Function that builds a source or a list of sources.")
@@ -246,7 +259,6 @@ at point."
 (defun helm-esh-pcomplete--make-helm (&optional input)
   (helm :sources (funcall helm-esh-pcomplete-build-source-fn)
         :buffer "*helm pcomplete*"
-        :keymap helm-esh-completion-map
         :resume 'noresume
         :input input))
 
@@ -284,7 +296,7 @@ at point."
       (delete-char -1) (setq del-dot t)
       (setq helm-ec-target (substring helm-ec-target 0 (1- (length helm-ec-target)))))
     (cond ((eq first ?\()
-           (helm-lisp-completion-or-file-name-at-point))
+           (helm-lisp-completion-at-point))
           ;; In eshell `pcomplete-parse-arguments' is called
           ;; with `pcomplete-parse-arguments-function'
           ;; locally bound to `eshell-complete-parse-arguments'
@@ -298,7 +310,7 @@ at point."
              ;; Set helm-eshell--quit-flag to non-nil only on
              ;; quit, this tells to not add final suffix when quitting
              ;; helm.
-             (add-hook 'helm-quit-hook 'helm-eshell--quit-hook-fn)
+             (add-hook 'helm-quit-hook #'helm-eshell--quit-hook-fn)
              (with-helm-show-completion beg end
                (unwind-protect
                    (or (helm-esh-pcomplete--make-helm
@@ -318,14 +330,14 @@ at point."
                          ;; global to pass it to `helm-quit-hook', this
                          ;; space is added when point is just after
                          ;; previous completion and there is no
-                         ;; more completion, see issue #1832.
+                         ;; more completion, see Bug#1832.
                          (unless (or helm-eshell--quit-flag
                                      (looking-back "/\\'" (1- (point))))
                            (prog1 t (insert " ")))
                          (when (and helm-eshell--quit-flag
                                     (string-match-p "[.]\\{2\\}\\'" last))
                            (insert "/"))))
-                 (remove-hook 'helm-quit-hook 'helm-eshell--quit-hook-fn)
+                 (remove-hook 'helm-quit-hook #'helm-eshell--quit-hook-fn)
                  (setq helm-eshell--quit-flag nil)))))))
 
 (defun helm-eshell--quit-hook-fn ()
@@ -361,25 +373,22 @@ at point."
 (defface helm-eshell-prompts-promptidx
   `((t ,@(and (>= emacs-major-version 27) '(:extend t))
        :foreground "cyan"))
-  "Face used to highlight Eshell prompt index."
-  :group 'helm-eshell-faces)
+  "Face used to highlight Eshell prompt index.")
 
 (defface helm-eshell-prompts-buffer-name
   `((t ,@(and (>= emacs-major-version 27) '(:extend t))
        :foreground "green"))
-  "Face used to highlight Eshell buffer name."
-  :group 'helm-eshell-faces)
+  "Face used to highlight Eshell buffer name.")
 
 (defcustom helm-eshell-prompts-promptidx-p t
   "Show prompt number."
-  :group 'helm-eshell
   :type 'boolean)
 
 (defvar helm-eshell-prompts-keymap
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map helm-map)
-    (define-key map (kbd "C-c o")   'helm-eshell-prompts-other-window)
-    (define-key map (kbd "C-c C-o") 'helm-eshell-prompts-other-frame)
+    (define-key map (kbd "C-c o")   #'helm-eshell-prompts-other-window)
+    (define-key map (kbd "C-c C-o") #'helm-eshell-prompts-other-frame)
     map)
   "Keymap for `helm-eshell-prompt-all'.")
 
@@ -402,7 +411,7 @@ If BUFFER is nil, use current buffer."
                            (get-text-property (match-beginning 0) 'read-only))
                       (null eshell-highlight-prompt))
               (push (list (buffer-substring-no-properties
-                           it (point-at-eol))
+                           it (pos-eol))
                           it (buffer-name) count)
                     result)
               (setq count (1+ count))))
@@ -434,8 +443,9 @@ See `helm-eshell-prompts-list'."
 (defun helm-eshell-prompts-all-transformer (candidates)
   (helm-eshell-prompts-transformer candidates t))
 
-(cl-defun helm-eshell-prompts-goto (candidate &optional (action 'switch-to-buffer))
+(defun helm-eshell-prompts-goto (candidate &optional action)
   ;; Candidate format: ("ls" 162 "*eshell*" 3)
+  (unless action (setq action #'switch-to-buffer))
   (let ((buf (nth 2 candidate)))
     (unless (and (string= (buffer-name) buf)
                  (eq action 'switch-to-buffer))
@@ -449,17 +459,13 @@ See `helm-eshell-prompts-list'."
 (defun helm-eshell-prompts-goto-other-frame (candidate)
   (helm-eshell-prompts-goto candidate 'switch-to-buffer-other-frame))
 
-(defun helm-eshell-prompts-other-window ()
-  (interactive)
-  (with-helm-alive-p
-    (helm-exit-and-execute-action 'helm-eshell-prompts-goto-other-window)))
-(put 'helm-eshell-prompts-other-window 'helm-only t)
+(helm-make-command-from-action helm-eshell-prompts-other-window
+    "Switch to eshell prompt in other window."
+  'helm-eshell-prompts-goto-other-window)
 
-(defun helm-eshell-prompts-other-frame ()
-  (interactive)
-  (with-helm-alive-p
-    (helm-exit-and-execute-action 'helm-eshell-prompts-goto-other-frame)))
-(put 'helm-eshell-prompts-other-frame 'helm-only t)
+(helm-make-command-from-action helm-eshell-prompts-other-frame
+    "Switch to eshell prompt in other frame."
+  'helm-eshell-prompts-goto-other-frame)
 
 ;;;###autoload
 (defun helm-eshell-prompts ()
@@ -487,15 +493,9 @@ See `helm-eshell-prompts-list'."
                      helm-eshell-prompts-goto-other-window)
                     ("Go to prompt in other frame `C-c C-o`" .
                      helm-eshell-prompts-goto-other-frame))
-          :keymap helm-eshell-prompts-keymap)
+          :keymap 'helm-eshell-prompts-keymap)
         :buffer "*helm Eshell all prompts*"))
 
 (provide 'helm-eshell)
-
-;; Local Variables:
-;; byte-compile-warnings: (not obsolete)
-;; coding: utf-8
-;; indent-tabs-mode: nil
-;; End:
 
 ;;; helm-eshell ends here

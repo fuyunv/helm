@@ -1,8 +1,8 @@
 ;;; helm-lib.el --- Helm routines. -*- lexical-binding: t -*-
 
-;; Copyright (C) 2015 ~ 2019  Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Copyright (C) 2015 ~ 2026  Thierry Volpiatto
 
-;; Author: Thierry Volpiatto <thierry.volpiatto@gmail.com>
+;; Author: Thierry Volpiatto
 ;; URL: http://github.com/emacs-helm/helm
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -25,39 +25,56 @@
 
 (require 'cl-lib)
 
-(declare-function wdired-change-to-dired-mode "wdired.el")
-(declare-function wdired-do-symlink-changes "wdired.el")
-(declare-function wdired-do-perm-changes "wdired.el")
-(declare-function wdired-get-filename "wdired.el")
-(declare-function wdired-do-renames "wdired.el")
-(declare-function wdired-flag-for-deletion "wdired.el")
-(declare-function wdired-normalize-filename "wdired.el")
-(declare-function dired-mark-remembered "dired.el")
-(declare-function dired-log-summary "dired.el")
-(declare-function dired-current-directory "dired.el")
 (declare-function ansi-color--find-face "ansi-color.el")
 (declare-function ansi-color-apply-sequence "ansi-color.el")
-(declare-function helm-get-sources "helm.el")
-(declare-function helm-marked-candidates "helm.el")
-(declare-function helm-follow-mode-p "helm.el")
-(declare-function helm-attr "helm.el")
-(declare-function helm-attrset "helm.el")
-(declare-function org-open-at-point "org.el")
+(declare-function dired-current-directory "dired.el")
+(declare-function ffap-file-remote-p "ffap.el")
+(declare-function ffap-url-p "ffap.el")
+(declare-function helm-get-attr "helm-core.el")
+(declare-function helm-set-attr "helm-core.el")
+(declare-function helm-follow-mode-p "helm-core.el")
+(declare-function helm-get-current-source "helm-core.el")
+(declare-function helm-get-selection "helm-core.el")
+(declare-function helm-get-sources "helm-core.el")
+(declare-function helm-interpret-value "helm-core.el")
+(declare-function helm-log-run-hook "helm-core.el")
+(declare-function helm-next-line "helm-core.el")
+(declare-function helm-get-next-header-pos "helm-core.el")
+(declare-function helm-select-current-line "helm-core.el")
+(declare-function helm-marked-candidates "helm-core.el")
+(declare-function helm-set-case-fold-search "helm-core.el")
+(declare-function helm-get-previous-header-pos "helm-core.el")
+(declare-function helm-source--cl--print-table "helm-source.el")
+(declare-function helm-update "helm-core.el")
 (declare-function org-content "org.el")
 (declare-function org-mark-ring-goto "org.el")
 (declare-function org-mark-ring-push "org.el")
-(declare-function helm-interpret-value "helm.el")
-(declare-function helm-get-current-source "helm.el")
-(declare-function helm-source--cl--print-table "helm-source.el")
+(declare-function org-table-p "org-compat.el")
+(declare-function org-table-align "org-table.el")
+(declare-function org-table-end "org-table.el")
+(declare-function org-open-at-point "org.el")
+(declare-function helm-read-file-name "helm-mode.el")
+(declare-function find-function-library "find-func.el")
+(declare-function find-library-name "find-func.el")
+(declare-function cl--describe-class-slots "cl-extra.el")
+(declare-function cl--find-class "cl-macs.el")
+
 (defvar helm-sources)
 (defvar helm-initial-frame)
 (defvar helm-current-position)
-(defvar wdired-old-marks)
-(defvar wdired-keep-marker-rename)
-(defvar wdired-allow-to-change-permissions)
-(defvar wdired-allow-to-redirect-links)
 (defvar helm-persistent-action-display-window)
+(defvar helm--buffer-in-new-frame-p)
+(defvar helm-completion-style)
+(defvar helm-completion-styles-alist)
+(defvar helm-persistent-action-window-buffer)
+(defvar helm-help-buffer-name)
 (defvar completion-flex-nospace)
+(defvar find-function-source-path)
+(defvar ffap-machine-p-unknown)
+(defvar ffap-machine-p-local)
+(defvar ffap-machine-p-known)
+(defvar helm-debug-output-buffer)
+(defvar org-fold-show-context-detail)
 
 ;;; User vars.
 ;;
@@ -79,8 +96,8 @@ already provided by \\<helm-map>\\[next-history-element]."
   :group 'helm)
 
 (defcustom helm-scroll-amount nil
-  "Scroll amount when scrolling other window in a helm session.
-It is used by `helm-scroll-other-window'
+  "Scroll amount when scrolling helm window or other window in a helm session.
+It is used by `helm-scroll-other-window', `helm-scroll-up', `helm-scroll-down'
 and `helm-scroll-other-window-down'.
 
 If you prefer scrolling line by line, set this value to 1."
@@ -100,14 +117,10 @@ convenient to use a simple boolean value here."
 (defun helm-ff--setup-boring-regex (var val)
   (set var val)
   (setq helm-ff--boring-regexp
-          (cl-loop with last = (car (last val))
-                   for r in (butlast val)
-                   if (string-match "\\$\\'" r)
-                   concat (concat r "\\|") into result
-                   else concat (concat r "$\\|") into result
-                   finally return
-                   (concat result last
-                           (if (string-match "\\$\\'" last) "" "$")))))
+        (cl-loop for r on val
+                 if (cdr r)
+                 concat (concat (car r) "\\|")
+                 else concat (car r))))
 
 (defcustom helm-boring-file-regexp-list
   (mapcar (lambda (f)
@@ -115,13 +128,15 @@ convenient to use a simple boolean value here."
               (if (string-match-p "[^/]$" f)
                   ;; files: e.g .o => \\.o$
                   (concat rgx "$")
-                ;; directories: e.g .git/ => \.git\\(/\\|$\\)
-                (concat (substring rgx 0 -1) "\\(/\\|$\\)"))))
+                ;; To not ignore files with same prefix as directory names
+                ;; (bug#2009) use e.g. .git/ => \.git\?$.
+                ;; See also PR in bug#2012.
+                (concat rgx "?$"))))
           completion-ignored-extensions)
   "A list of regexps matching boring files.
 
 This list is build by default on `completion-ignored-extensions'.
-The directory names should end with \"/?\" e.g. \"\\.git/?\" and
+The directory names should end with \"/?$\" e.g. \"\\.git/?$\" and
 the file names should end with \"$\" e.g. \"\\.o$\".
 
 These regexps may be used to match the entire path, not just the
@@ -145,6 +160,17 @@ the customize functions e.g. `customize-set-variable' and NOT
   :group 'helm-elisp
   :type 'function)
 
+(defcustom helm-current-directory-alist
+  '((dired-mode . dired-current-directory)
+    (mu4e-main-mode . mu4e-root-maildir)
+    (gnus-group-mode . gnus-directory)
+    (gnus-summary-mode . gnus-directory)
+    (gnus-article-mode . gnus-directory))
+  "Tell `helm-current-directory' what to use according to `major-mode'.
+Each element of alist is (MAJOR-MODE . SYMBOL) where SYMBOL is either a variable
+or a function."
+  :type '(alist :key-type symbol :value-type sexp)
+  :group 'helm-files)
 
 ;;; Internal vars
 ;;
@@ -158,7 +184,10 @@ the customize functions e.g. `customize-set-variable' and NOT
 (defvar helm-suspend-update-flag nil)
 (defvar helm-action-buffer "*helm action*"
   "Buffer showing actions.")
-
+(defvar helm-current-prefix-arg nil
+  "Record `current-prefix-arg' when exiting minibuffer.")
+(defvar helm-current-error nil
+  "Same as `compilation-current-error' but for helm-occur and helm-grep.")
 
 ;;; Compatibility
 ;;
@@ -171,136 +200,6 @@ available APPEND is ignored."
   (if (fboundp 'add-face-text-property)
       (add-face-text-property beg end face append object)
       (add-text-properties beg end `(face ,face) object)))
-
-;; Override `wdired-finish-edit'.
-;; Fix emacs bug in `wdired-finish-edit' where
-;; Wdired is not handling the case where `dired-directory' is a cons
-;; cell instead of a string.
-(defun helm--advice-wdired-finish-edit ()
-  (interactive)
-  (wdired-change-to-dired-mode)
-  (let ((changes nil)
-	(errors 0)
-	files-deleted
-	files-renamed
-	some-file-names-unchanged
-	file-old file-new tmp-value)
-    (save-excursion
-      (when (and wdired-allow-to-redirect-links
-		 (fboundp 'make-symbolic-link))
-	(setq tmp-value (wdired-do-symlink-changes))
-	(setq errors (cdr tmp-value))
-	(setq changes (car tmp-value)))
-      (when (and wdired-allow-to-change-permissions
-		 (boundp 'wdired-col-perm)) ; could have been changed
-	(setq tmp-value (wdired-do-perm-changes))
-	(setq errors (+ errors (cdr tmp-value)))
-	(setq changes (or changes (car tmp-value))))
-      (goto-char (point-max))
-      (while (not (bobp))
-	(setq file-old (wdired-get-filename nil t))
-	(when file-old
-	  (setq file-new (wdired-get-filename))
-          (if (equal file-new file-old)
-	      (setq some-file-names-unchanged t)
-            (setq changes t)
-            (if (not file-new)		;empty filename!
-                (push file-old files-deleted)
-	      (when wdired-keep-marker-rename
-		(let ((mark (cond ((integerp wdired-keep-marker-rename)
-				   wdired-keep-marker-rename)
-				  (wdired-keep-marker-rename
-				   (cdr (assoc file-old wdired-old-marks)))
-				  (t nil))))
-		  (when mark
-		    (push (cons (substitute-in-file-name file-new) mark)
-			  wdired-old-marks))))
-              (push (cons file-old (substitute-in-file-name file-new))
-                    files-renamed))))
-	(forward-line -1)))
-    (when files-renamed
-      (setq errors (+ errors (wdired-do-renames files-renamed))))
-    (if changes
-	(progn
-	  ;; If we are displaying a single file (rather than the
-	  ;; contents of a directory), change dired-directory if that
-	  ;; file was renamed.  (This ought to be generalized to
-	  ;; handle the multiple files case, but that's less trivial)
-          ;; fixit [1].
-	  (cond ((and (stringp dired-directory)
-                      (not (file-directory-p dired-directory))
-                      (null some-file-names-unchanged)
-                      (= (length files-renamed) 1))
-                 (setq dired-directory (cdr (car files-renamed))))
-                ;; Fix [1] i.e dired buffers created with
-                ;; (dired '(foo f1 f2 f3)).
-                ((and (consp dired-directory)
-                      (cdr dired-directory)
-                      files-renamed)
-                 (setcdr dired-directory
-                         ;; Replace in `dired-directory' files that have
-                         ;; been modified with their new name keeping
-                         ;; the ones that are unmodified at the same place.
-                         (cl-loop with old-to-rename = (mapcar 'car files-renamed)
-                                  for f in (cdr dired-directory)
-                                  if (member f old-to-rename)
-                                  collect (assoc-default f files-renamed)
-                                  else collect f))))
-	  ;; Re-sort the buffer if all went well.
-	  (unless (> errors 0) (revert-buffer))
-	  (let ((inhibit-read-only t))
-	    (dired-mark-remembered wdired-old-marks)))
-      (let ((inhibit-read-only t))
-	(remove-text-properties (point-min) (point-max)
-				'(old-name nil end-name nil old-link nil
-					   end-link nil end-perm nil
-					   old-perm nil perm-changed nil))
-	(message "(No changes to be performed)")))
-    (when files-deleted
-      (wdired-flag-for-deletion files-deleted))
-    (when (> errors 0)
-      (dired-log-summary (format "%d rename actions failed" errors) nil)))
-  (set-buffer-modified-p nil)
-  (setq buffer-undo-list nil))
-
-;; Override `wdired-get-filename'.
-;; Fix emacs bug in `wdired-get-filename' which returns the current
-;; directory concatened with the filename i.e
-;; "/home/you//home/you/foo" when filename is absolute in dired
-;; buffer.
-;; In consequence Wdired try to rename files even when buffer have
-;; been modified and corrected, e.g delete one char and replace it so
-;; that no change to file is done.
-;; This also lead to ask confirmation for every files even when not
-;; modified and when `wdired-use-interactive-rename' is nil.
-(defun helm--advice-wdired-get-filename (&optional no-dir old)
-  ;; FIXME: Use dired-get-filename's new properties.
-  (let (beg end file)
-    (save-excursion
-      (setq end (line-end-position))
-      (beginning-of-line)
-      (setq beg (next-single-property-change (point) 'old-name nil end))
-      (unless (eq beg end)
-	(if old
-	    (setq file (get-text-property beg 'old-name))
-	  ;; In the following form changed `(1+ beg)' to `beg' so that
-	  ;; the filename end is found even when the filename is empty.
-	  ;; Fixes error and spurious newlines when marking files for
-	  ;; deletion.
-	  (setq end (next-single-property-change beg 'end-name))
-	  (setq file (buffer-substring-no-properties (1+ beg) end)))
-	;; Don't unquote the old name, it wasn't quoted in the first place
-        (and file (setq file (condition-case _err
-                                 ;; emacs-25+
-                                 (apply #'wdired-normalize-filename
-                                        (list file (not old)))
-                               (wrong-number-of-arguments
-                                ;; emacs-24
-                                (wdired-normalize-filename file))))))
-      (if (or no-dir old (and file (file-name-absolute-p file)))
-	  file
-	(and file (> (length file) 0)
-             (expand-file-name file (dired-current-directory)))))))
 
 ;;; Override `push-mark'
 ;;
@@ -352,6 +251,157 @@ available APPEND is ignored."
       (setq guess (abbreviate-file-name (expand-file-name guess))))
     (read-file-name prompt (file-name-directory guess) nil nil
                     (file-name-nondirectory guess))))
+
+;; The native-comp branch of emacs "is a modified Emacs capable of compiling
+;; and running Emacs Lisp as native code in form of re-loadable elf files."
+;; (https://akrl.sdf.org/gccemacs.html). The function subr-native-elisp-p is a
+;; native function available only in this branch and evaluates to true if the
+;; argument supplied is a natively compiled lisp function. Use this function
+;; if it's available, otherwise return nil. Helm needs to distinguish compiled
+;; functions from other symbols in a various places.
+(defun helm-subr-native-elisp-p (object)
+  (when (fboundp 'subr-native-elisp-p)
+      (subr-native-elisp-p object)))
+
+;; Available only in Emacs-28+
+(unless (fboundp 'file-modes-number-to-symbolic)
+  (defun file-modes-number-to-symbolic (mode &optional filetype)
+    "Return a string describing a file's MODE.
+For instance, if MODE is #o700, then it produces `-rwx------'.
+FILETYPE if provided should be a character denoting the type of file,
+such as `?d' for a directory, or `?l' for a symbolic link and will override
+the leading `-' char."
+    (string
+     (or filetype
+         (pcase (ash mode -12)
+           ;; POSIX specifies that the file type is included in st_mode
+           ;; and provides names for the file types but values only for
+           ;; the permissions (e.g., S_IWOTH=2).
+
+           ;; (#o017 ??) ;; #define S_IFMT  00170000
+           (#o014 ?s) ;; #define S_IFSOCK 0140000
+           (#o012 ?l) ;; #define S_IFLNK  0120000
+           ;; (8  ??)    ;; #define S_IFREG  0100000
+           (#o006  ?b) ;; #define S_IFBLK  0060000
+           (#o004  ?d) ;; #define S_IFDIR  0040000
+           (#o002  ?c) ;; #define S_IFCHR  0020000
+           (#o001  ?p) ;; #define S_IFIFO  0010000
+           (_ ?-)))
+     (if (zerop (logand   256 mode)) ?- ?r)
+     (if (zerop (logand   128 mode)) ?- ?w)
+     (if (zerop (logand    64 mode))
+         (if (zerop (logand  2048 mode)) ?- ?S)
+       (if (zerop (logand  2048 mode)) ?x ?s))
+     (if (zerop (logand    32 mode)) ?- ?r)
+     (if (zerop (logand    16 mode)) ?- ?w)
+     (if (zerop (logand     8 mode))
+         (if (zerop (logand  1024 mode)) ?- ?S)
+       (if (zerop (logand  1024 mode)) ?x ?s))
+     (if (zerop (logand     4 mode)) ?- ?r)
+     (if (zerop (logand     2 mode)) ?- ?w)
+     (if (zerop (logand 512 mode))
+         (if (zerop (logand   1 mode)) ?- ?x)
+       (if (zerop (logand   1 mode)) ?T ?t)))))
+
+(unless (and (fboundp 'pos-bol) (fboundp 'pos-eol))
+  (defalias 'pos-bol 'line-beginning-position)
+  (defalias 'pos-eol 'line-end-position))
+
+;;; Compatibility with < Emacs-29
+;;  Needed by helm-packages.el and affixations functions for helm-mode (27)
+;;  waiting package.el moves on Elpa.  Slightly modified to fit with
+;;  Emacs-27/28.
+(when (eval-when-compile (< emacs-major-version 29)) ; Avoid warnings.
+  (require 'package)
+  (defun package--archives-initialize ()
+    "Make sure the list of installed and remote packages are initialized."
+    (unless package--initialized
+      (package-initialize t))
+    (unless package-archive-contents
+      (package-refresh-contents)))
+
+  (defun package-get-descriptor (pkg-name)
+    "Return the `package-desc' of PKG-NAME."
+    (unless package--initialized (package-initialize 'no-activate))
+    (or (cadr (assq pkg-name package-alist))
+        (cadr (assq pkg-name package-archive-contents))))
+
+  (defun package-upgrade (name)
+    "Upgrade package NAME if a newer version exists."
+    (let* ((package (if (symbolp name)
+                        name
+                      (intern name)))
+           (pkg-desc (cadr (assq package package-alist))))
+      ;; `pkg-desc' will be nil when the package is an "active built-in".
+      (when pkg-desc
+        (package-delete pkg-desc 'force 'dont-unselect))
+      (package-install package
+                       ;; An active built-in has never been "selected"
+                       ;; before.  Mark it as installed explicitly.
+                       (and pkg-desc 'dont-select))))
+
+  (defun package-recompile (pkg)
+    "Byte-compile package PKG again.
+PKG should be either a symbol, the package name, or a `package-desc'
+object."
+    (let ((pkg-desc (if (package-desc-p pkg)
+                        pkg
+                      (cadr (assq pkg package-alist)))))
+      ;; Delete the old .elc files to ensure that we don't inadvertently
+      ;; load them (in case they contain byte code/macros that are now
+      ;; invalid).
+      (dolist (elc (directory-files-recursively
+                    (package-desc-dir pkg-desc) "\\.elc\\'"))
+        (delete-file elc))
+      (package--compile pkg-desc))))
+
+;;; Provide `help--symbol-class' not available in emacs-27
+;;
+(unless (fboundp 'help--symbol-class)
+  (defun help--symbol-class (s)
+    "Return symbol class characters for symbol S."
+    (when (stringp s)
+      (setq s (intern-soft s)))
+    (concat
+     (when (fboundp s)
+       (concat
+        (cond
+          ((commandp s) "c")
+          ((eq (car-safe (symbol-function s)) 'macro) "m")
+          (t "f"))
+        (and (let ((flist (indirect-function s)))
+               (advice--p (if (eq 'macro (car-safe flist)) (cdr flist) flist)))
+             "!")
+        (and (get s 'byte-obsolete-info) "-")))
+     (when (boundp s)
+       (concat
+        (if (custom-variable-p s) "u" "v")
+        (and (local-variable-if-set-p s) "'")
+        (and (ignore-errors (not (equal (symbol-value s) (default-value s)))) "*")
+        (and (get s 'byte-obsolete-variable) "-")))
+     (and (facep s) "a")
+     (and (fboundp 'cl-find-class) (cl-find-class s) "t"))))
+
+;; Inline `kmacro--to-vector' from E29 to fix compatibility of
+;; `helm-kbd-macro-concat-macros' with E29 and E28.
+(unless (fboundp 'kmacro--to-vector)
+  (defun kmacro--to-vector (object)
+    "Normalize an old-style key sequence to the vector form."
+    (if (not (stringp object))
+        object
+      (let ((vec (string-to-vector object)))
+        (unless (multibyte-string-p object)
+          (dotimes (i (length vec))
+            (let ((k (aref vec i)))
+              (when (> k 127)
+                (setf (aref vec i) (+ k ?\M-\C-@ -128))))))
+        vec))))
+
+(defun helm-proper-list-p (obj)
+  "Compatibility function for `proper-list-p'."
+  (if (fboundp 'proper-list-p)
+      (proper-list-p obj) ; 27+
+    (and (listp obj) (not (cdr (last obj))))))
 
 ;;; Macros helper.
 ;;
@@ -370,24 +420,35 @@ available APPEND is ignored."
 
 ;;; Command loop helper
 ;;
+(defconst helm-this-command-black-list
+  '(helm-maybe-exit-minibuffer
+    helm-confirm-and-exit-minibuffer
+    helm-exit-minibuffer
+    exit-minibuffer
+    helm-M-x))
+
+(defconst helm-this-command-functions '(read-multiple-choice--long-answers)
+  "The functions that should be returned by `helm-this-command' when found.")
+
 (defun helm-this-command ()
   "Return the actual command in action.
 Like `this-command' but return the real command, and not
 `exit-minibuffer' or other unwanted functions."
-  (cl-loop with bl = '(helm-maybe-exit-minibuffer
-                       helm-confirm-and-exit-minibuffer
-                       helm-exit-minibuffer
-                       exit-minibuffer)
-           for count from 1 to 50
+  (cl-loop for count from 1 to 50
            for btf = (backtrace-frame count)
            for fn = (cl-second btf)
-           if (and
-               ;; In some case we may have in the way an
-               ;; advice compiled resulting in byte-code,
-               ;; ignore it (Issue #691).
-               (symbolp fn)
-               (commandp fn)
-               (not (memq fn bl)))
+           ;; Some commands like `kill-buffer' may call another function
+           ;; involving a completing-read, in this case we want to stop at this
+           ;; function and not go up to the initial interactive call (in this
+           ;; case kill-buffer) See Issue#2634.
+           if (or (memq fn helm-this-command-functions)
+                  (and
+                   ;; In some cases we may have in the way an
+                   ;; advice compiled resulting in byte-code,
+                   ;; ignore it (Bug#691).
+                   (symbolp fn)
+                   (commandp fn)
+                   (not (memq fn helm-this-command-black-list))))
            return fn
            else
            if (and (eq fn 'call-interactively)
@@ -397,43 +458,26 @@ Like `this-command' but return the real command, and not
 
 ;;; Iterators
 ;;
-(cl-defmacro helm-position (item seq &key test all)
-  "A simple and faster replacement of CL `position'.
-
-Returns ITEM first occurence position found in SEQ.
-When SEQ is a string, ITEM have to be specified as a char.
-Argument TEST when unspecified default to `eq'.
-When argument ALL is non-nil return a list of all ITEM positions
-found in SEQ."
-  (let ((key (if (stringp seq) 'across 'in)))
-    `(cl-loop with deftest = 'eq
-              for c ,key ,seq
-              for index from 0
-              when (funcall (or ,test deftest) c ,item)
-              if ,all collect index into ls
-              else return index
-              finally return ls)))
-
-(defun helm-iter-list (seq)
-  "Return an iterator object from SEQ."
+(defun helm-iter-list (seq &optional cycle)
+  "Return an iterator object from SEQ.
+The iterator dies and returns nil when it reaches end of SEQ.
+When CYCLE is specified the iterator never ends."
   (let ((lis seq))
     (lambda ()
       (let ((elm (car lis)))
-        (setq lis (cdr lis))
+        (setq lis (if cycle
+                      (or (cdr lis) seq)
+                    (cdr lis)))
         elm))))
 
 (defun helm-iter-circular (seq)
   "Infinite iteration on SEQ."
-  (let ((lis seq))
-     (lambda ()
-       (let ((elm (car lis)))
-         (setq lis (pcase lis (`(,_ . ,ll) (or ll seq))))
-         elm))))
+  (helm-iter-list seq 'cycle))
 
 (cl-defun helm-iter-sub-next-circular (seq elm &key (test 'eq))
   "Infinite iteration of SEQ starting at ELM."
   (let* ((pos      (1+ (helm-position elm seq :test test)))
-         (sub      (append (nthcdr pos seq) (cl-subseq seq 0 pos)))
+         (sub      (append (nthcdr pos seq) (helm-take seq pos)))
          (iterator (helm-iter-circular sub)))
     (lambda ()
       (helm-iter-next iterator))))
@@ -448,7 +492,7 @@ found in SEQ."
 (defmacro helm-aif (test-form then-form &rest else-forms)
   "Anaphoric version of `if'.
 Like `if' but set the result of TEST-FORM in a temporary variable
-called `it'.  THEN-FORM and ELSE-FORMS are then excuted just like
+called `it'.  THEN-FORM and ELSE-FORMS are then executed just like
 in `if'."
   (declare (indent 2) (debug t))
   `(let ((it ,test-form))
@@ -497,31 +541,93 @@ is usable in next condition."
                 (helm-aand ,@(cdr conditions))))))
 
 (defmacro helm-acase (expr &rest clauses)
-  "A simple anaphoric `cl-case' implementation handling strings.
-EXPR is bound to a temporary variable called `it' which is usable
-in CLAUSES to refer to EXPR.
-NOTE: Duplicate keys in CLAUSES are deliberately not handled.
+  "Check if EXPR match KEYLIST and then execute BODY.
+
+`helm-acase' is a small macro mixing the features of `cl-case'
+and `cond'.
+
+KEYLIST can be any object that will be compared with `equal' or
+an expression starting with special symbol `guard*' which is then
+evaluated.  Once evaluated the symbol `guard' is bound to the
+returned value that can be used in the cdr of clause.  When
+KEYLIST match EXPR or `guard*' sexp evaluation is non-nil, BODY
+is executed and `helm-acase' exits with its value.
+Note:
+\\+`guard*' sexp should not be a single symbol to eval, e.g. (guard* foo)
+in such cases you should use (guard* (progn foo)).
+
+KEYLIST can also be a list starting with special symbol \\+`dst*'
+followed by an expression suitable for `cl-destructuring-bind'.
+In this case all elements of \\+`it' are bound to the elements of
+this expression e.g.
+
+    (helm-acase \\='(1 2 3 4 5)
+      ((dst* (l &rest args)) args))
+    => (2 3 4 5)
+
+If KEYLIST is a list, it is compared with EXPR, also each
+elements of the list are checked with `member' to see if one
+matches EXPR, ensure to not use special symbols \\+`guard*' and
+\\+`dst*' at start of such KEYLIST to avoid confusing helm-acase
+even if this is partially supported.
+
+The last clause can use `t' or \\+`otherwise' as KEYLIST to specify a
+fallback clause when previous clauses didn't match, if such a clause
+starting with `t' or \\+`otherwise' is specified before last clause it
+will override all next clauses, if you want to match an EXPR value equal
+to `t' in any clauses quote it, i.e. `'t' or use an explicit
+\(guard* (eq it t)).
+
+EXPR is bound to a temporary variable called `it' which is
+usable in all clauses to refer to EXPR.
 
 \(fn EXPR (KEYLIST BODY...)...)"
-  (declare (indent 1) (debug (form &rest (sexp body))))
+  (declare (indent 1) (debug (form &rest ([&or (symbolp form) sexp] body))))
   (unless (null clauses)
-    (let ((clause1 (car clauses)))
-      `(let ((key ',(car clause1))
-             (it ,expr))
-         (if (or (equal it key)
-                 (and (listp key) (member it key))
-                 (eq key t))
-             (progn ,@(cdr clause1))
-           (helm-acase it ,@(cdr clauses)))))))
+    (let* ((clause1    (car clauses))
+           (key        (car clause1))
+           (sexp       (car-safe (cdr-safe key)))
+           (sp-sym     (car-safe key))
+           ;; Ensure dst* and guard* are not treated as special symbols when
+           ;; they are not followed by one sexp and nothing else, however if the
+           ;; following sexp is not meant to be evaluated but just compared we
+           ;; fail miserably, is it worth fixing it?
+           (issexp     (and (consp sexp) (= (length key) 2)))
+           (isguard    (and (eq 'guard* sp-sym) issexp))
+           (isdst      (and (eq 'dst* sp-sym) issexp))
+           (special    (or isguard isdst))
+           (guard-sexp (and isguard sexp))
+           (dst-sexp   (and isdst sexp)))
+      `(let* ((it    ,expr)
+              (guard ,guard-sexp)
+              (dst   (and (consp it) ',dst-sexp)))
+         (cond ((or guard
+                    (and ,(not special)
+                         (or (equal it ',key)
+                             (and (listp ',key) (member it ',key))))
+                    (and (symbolp ',key)
+                         (or (eq ',key t) (eq ',key 'otherwise))))
+                ;; When this branch is expanded the compiler complains about not
+                ;; referenced variables (the ones in `dst' that will be used in
+                ;; next branch) so prevent warnings instead of using a progn
+                ;; Merci Stefan!
+                (with-no-warnings ,@(cdr clause1)))
+               ((and dst
+                     (condition-case nil
+                         (cl-destructuring-bind ,dst-sexp it
+                           ,@(cdr clause1))
+                       (wrong-number-of-arguments nil))))
+               (t
+                (helm-acase it ,@(cdr clauses))))))))
 
 ;;; Fuzzy matching routines
 ;;
 (defsubst helm--mapconcat-pattern (pattern)
   "Transform string PATTERN in regexp for further fuzzy matching.
 E.g.: helm.el$
-     => \"[^h]*h[^e]*e[^l]*l[^m]*m[^.]*[.][^e]*e[^l]*l$\"
+     => \"[^h]*h[^e]*e[^l]*l[^m]*m[^.]*\\\\.[^e]*e[^l]*l$\"
      ^helm.el$
-     => \"helm[.]el$\"."
+     => \"helm\\\\.el$\"."
   (let ((ls (split-string-and-unquote pattern "")))
     (if (string= "^" (car ls))
         ;; Exact match.
@@ -538,23 +644,87 @@ E.g.: helm.el$
                    ls ""))))
 
 (defsubst helm--collect-pairs-in-string (string)
-  (cl-loop for str on (split-string string "" t) by 'cdr
-           when (cdr str)
-           collect (list (car str) (cadr str))))
+  ;; We want to collect e.g.
+  ;; in "abcd" -> (("a" "b") ("b" "c") ("c" "d"))
+  ;; and not (("a" "b") ("c" "d")) so we use by #'cdr which is the default.
+  ;; If the last pair have no cdr i.e. (s1 nil) ignore it.
+  (cl-loop for (s1 s2) on (split-string string "" t)
+           when s2 collect (list s1 s2)))
 
 ;;; Help routines.
 ;;
+(defvar helm-help--iter-org-state nil)
+
 (defvar helm-help-mode-before-hook nil
   "A hook that runs before helm-help starts.")
+
 (defvar helm-help-mode-after-hook nil
   "A hook that runs when helm-help exits.")
+
+(defcustom helm-help-default-prompt
+  "[SPC,C-v,next:ScrollUp  b,M-v,prior:ScrollDown TAB:Cycle M-TAB:All C-s/r:Isearch q:Quit]"
+  "The prompt used in `helm-help'."
+  :type 'string
+  :group 'helm)
+
+(defcustom helm-help-hkmap
+  '(("C-v" . helm-help-scroll-up)
+    ("SPC" . helm-help-scroll-up)
+    ("<next>" . helm-help-scroll-up)
+    ("M-v" . helm-help-scroll-down)
+    ("b" . helm-help-scroll-down)
+    ("<prior>" . helm-help-scroll-down)
+    ("C-s" . isearch-forward)
+    ("C-r" . isearch-backward)
+    ("C-a" . move-beginning-of-line)
+    ("C-e" . move-end-of-line)
+    ("C-f" . forward-char)
+    ("<right>" . forward-char)
+    ("C-b" . backward-char)
+    ("<left>" . backward-char)
+    ("C-n" . helm-help-next-line)
+    ("C-p" . helm-help-previous-line)
+    ("<down>" . helm-help-next-line)
+    ("<up>" . helm-help-previous-line)
+    ("M-a" . backward-sentence)
+    ("M-e" . forward-sentence)
+    ("M-f" . forward-word)
+    ("M-b" . backward-word)
+    ("M->" . end-of-buffer)
+    ("C-M-f" . forward-sexp)
+    ("C-M-b" . backward-sexp)
+    ("M-<" . beginning-of-buffer)
+    ("C-SPC" . helm-help-toggle-mark)
+    ("C-M-SPC" . mark-sexp)
+    ("TAB"   . org-cycle)
+    ("C-m" . helm-help-org-open-at-point)
+    ("C-&" . helm-help-org-mark-ring-goto)
+    ("C-%" . org-mark-ring-push)
+    ("M-TAB" . helm-help-org-cycle)
+    ("M-w" . helm-help-copy-region-as-kill)
+    ("q" . helm-help-quit))
+  "Alist of (KEY . FUNCTION) for `helm-help'.
+
+This is not a standard keymap, just an alist where it is possible to
+define a simple KEY (a string with no spaces) associated with a
+FUNCTION. More complex key like \"C-x C-x\" are not supported.
+Interactive functions will be called interactively whereas other
+functions will be called with funcall except commands that are in
+`helm-help-not-interactive-command'.
+For convenience you can add bindings here with `helm-help-define-key'."
+  :type '(alist :key-type string :key-value symbol)
+  :group 'helm)
+
+(defvar helm-help-not-interactive-command '(isearch-forward isearch-backward)
+  "Commands that we don't want to call interactively in `helm-help'.")
+
 (defun helm-help-internal (bufname insert-content-fn)
   "Show long message during Helm session in BUFNAME.
 INSERT-CONTENT-FN is the function that inserts text to be
 displayed in BUFNAME."
   (let ((winconf (current-frame-configuration))
         (hframe (selected-frame)))
-    (helm-log-run-hook 'helm-help-mode-before-hook)
+    (helm-log-run-hook "helm-help-internal" 'helm-help-mode-before-hook)
     (with-selected-frame helm-initial-frame
       (select-frame-set-input-focus helm-initial-frame)
       (unwind-protect
@@ -565,85 +735,129 @@ displayed in BUFNAME."
              (when helm-help-full-frame (delete-other-windows))
              (delete-region (point-min) (point-max))
              (org-mode)
-             (org-mark-ring-push) ; Put mark at bob
              (save-excursion
-               (funcall insert-content-fn))
+               (funcall insert-content-fn)
+               (goto-char (point-min))
+               (while (re-search-forward "^[|]" nil t)
+                 (when (org-table-p t)
+                   (org-table-align)
+                   (goto-char (org-table-end)))))
+             (org-mark-ring-push) ; Put mark at bob
              (buffer-disable-undo)
              (helm-help-event-loop))
         (raise-frame hframe)
-        (helm-log-run-hook 'helm-help-mode-after-hook)
+        (helm-log-run-hook "helm-help-internal" 'helm-help-mode-after-hook)
         (setq helm-suspend-update-flag nil)
         (set-frame-configuration winconf)))))
 
-(defun helm-help-scroll-up (amount)
+(cl-defun helm-help-scroll-up (&optional (amount helm-scroll-amount))
+  "Scroll up in `helm-help'."
   (condition-case _err
       (scroll-up-command amount)
     (beginning-of-buffer nil)
     (end-of-buffer nil)))
 
-(defun helm-help-scroll-down (amount)
+(cl-defun helm-help-scroll-down (&optional (amount helm-scroll-amount))
+  "Scroll down in `helm-help'."
   (condition-case _err
       (scroll-down-command amount)
     (beginning-of-buffer nil)
     (end-of-buffer nil)))
 
 (defun helm-help-next-line ()
+  "Next line function for `helm-help'."
   (condition-case _err
       (call-interactively #'next-line)
     (beginning-of-buffer nil)
     (end-of-buffer nil)))
 
 (defun helm-help-previous-line ()
+  "Previous line function for `helm-help'."
   (condition-case _err
       (call-interactively #'previous-line)
     (beginning-of-buffer nil)
     (end-of-buffer nil)))
 
 (defun helm-help-toggle-mark ()
+  "Toggle mark in `helm-help'."
   (if (region-active-p)
       (deactivate-mark)
       (push-mark nil nil t)))
 
-;; For movement of cursor in help buffer we need to call interactively
-;; commands for impaired people using a synthetizer (#1347).
+(defun helm-help-org-cycle ()
+  "Runs `org-cycle' in `helm-help'."
+  (helm-acase (helm-iter-next helm-help--iter-org-state)
+    ((guard* (numberp it)) (org-content))
+    ;; See `helm--help-org-prefargs' about `org-cycle' ARG.
+    (t (org-cycle it))))
+
+(defun helm-help-copy-region-as-kill ()
+  "Copy region function for `helm-help'"
+  (copy-region-as-kill
+   (region-beginning) (region-end))
+  (deactivate-mark))
+
+(defun helm-help-quit ()
+  "Quit `helm-help'."
+  (if (or (get-buffer-window helm-help-buffer-name 'visible)
+          (get-buffer-window helm-debug-output-buffer 'visible))
+      (throw 'helm-help-quit nil)
+    (quit-window)))
+
+(defun helm-help-org-open-at-point ()
+  "Calls `org-open-at-point' ignoring errors."
+  (ignore-errors
+    (org-open-at-point)))
+
+(defun helm-help-org-mark-ring-goto ()
+  "Calls `org-mark-ring-goto' ignoring errors."
+  ;; Don't reveal links when going back to them.
+  (let ((org-fold-show-context-detail 'org-goto))
+    (ignore-errors
+      (org-mark-ring-goto))))
+
+(defvar helm--help-org-prefargs
+  (if (> emacs-major-version 28)
+      '(1 (4) (16)) '(1 (16) (64)))
+  "`org-cycle' ARG have not the same meaning across Emacs versions.")
+
 (defun helm-help-event-loop ()
+  "The loop in charge of scanning keybindings in `helm-help'."
   (let ((prompt (propertize
-                 "[SPC,C-v,next:ScrollUp  b,M-v,prior:ScrollDown TAB:Cycle M-TAB:All C-s/r:Isearch q:Quit]"
+                 helm-help-default-prompt
                  'face 'helm-helper))
         scroll-error-top-bottom
-        (iter-org-state (helm-iter-circular '(1 (16) (64)))))
-    (helm-awhile (read-key prompt)
-      (cl-case it
-        ((?\C-v ? next) (helm-help-scroll-up helm-scroll-amount))
-        ((?\M-v ?b prior) (helm-help-scroll-down helm-scroll-amount))
-        (?\C-s (isearch-forward))
-        (?\C-r (isearch-backward))
-        (?\C-a (call-interactively #'move-beginning-of-line))
-        (?\C-e (call-interactively #'move-end-of-line))
-        ((?\C-f right) (call-interactively #'forward-char))
-        ((?\C-b left) (call-interactively #'backward-char))
-        ((?\C-n down) (helm-help-next-line))
-        ((?\C-p up) (helm-help-previous-line))
-        (?\M-a (call-interactively #'backward-sentence))
-        (?\M-e (call-interactively #'forward-sentence))
-        (?\M-f (call-interactively #'forward-word))
-        (?\M-b (call-interactively #'backward-word))
-        (?\M-> (call-interactively #'end-of-buffer))
-        (?\M-< (call-interactively #'beginning-of-buffer))
-        (?\C-  (helm-help-toggle-mark))
-        (?\t   (org-cycle))
-        (?\C-m (ignore-errors (call-interactively #'org-open-at-point)))
-        (?\C-& (ignore-errors (call-interactively #'org-mark-ring-goto)))
-        (?\C-% (call-interactively #'org-mark-ring-push))
-        (?\M-\t (pcase (helm-iter-next iter-org-state)
-                  ((pred numberp) (org-content))
-                  ((and state) (org-cycle state))))
-        (?\M-w (copy-region-as-kill
-                (region-beginning) (region-end))
-               (deactivate-mark))
-        (?q    (cl-return))
-        (t     (ignore))))))
+        (helm-help--iter-org-state (helm-iter-circular helm--help-org-prefargs)))
+    (catch 'helm-help-quit
+      (helm-awhile (read-key prompt)
+        (let ((fun (cl-loop for (k . v) in helm-help-hkmap
+                            when (eql (aref (kbd k) 0) it)
+                            return v)))
+          (when fun
+            (if (and (commandp fun)
+                     (not (memq fun helm-help-not-interactive-command)))
+                ;; For movement of cursor in help buffer we need to
+                ;; call interactively commands for impaired people
+                ;; using a synthetizer (Bug#1347).
+                (call-interactively fun)
+              (funcall fun))))))))
 
+(defun helm-help-define-key (key function &optional override)
+  "Add KEY bound to fUNCTION in `helm-help-hkmap'.
+
+If OVERRIDE is non nil, all bindings associated with FUNCTION are
+removed and only (KEY . FUNCTION) is kept.
+If FUNCTION is nil (KEY . FUNCTION) is not added and removed from
+alist if already present.
+See `helm-help-hkmap' for supported keys and functions."
+  (cl-assert (not (cdr (split-string key))) nil
+             (format "Error: Unsuported key `%s'" key))
+  (when override
+    (helm-awhile (rassoc function helm-help-hkmap)
+      (setq helm-help-hkmap (delete it helm-help-hkmap))))
+  (helm-aif (and (null function) (assoc key helm-help-hkmap))
+      (setq helm-help-hkmap (delete it helm-help-hkmap))
+    (and function (add-to-list 'helm-help-hkmap `(,key . ,function)))))
 
 ;;; Multiline transformer
 ;;
@@ -679,28 +893,30 @@ displayed in BUFNAME."
 
 ;;; List processing
 ;;
-(defun helm-flatten-list (seq &optional omit-nulls)
-  "Return a list of all single elements of sublists in SEQ."
+(defun helm-flatten-list (seq)
+  "Return a list of all single elements of sublists in SEQ.
+
+    Example:
+    (helm-flatten-list \\='(1 (2 . 3) nil (4 5 (6) 7) 8 (9 . 10)))
+    => (1 2 3 4 5 6 7 8 9 10)"
   (let (result)
-    (cl-labels ((flatten (seq)
-                  (cl-loop
-                        for elm in seq
-                        if (and (or elm
-                                    (null omit-nulls))
-                                (or (atom elm)
-                                    (functionp elm)
-                                    (and (consp elm)
-                                         (cdr elm)
-                                         (atom (cdr elm)))))
-                        do (push elm result)
-                        else do (flatten elm))))
+    (cl-labels ((flatten
+                 (seq)
+                 (cl-loop for elm in seq
+                          if (consp elm)
+                          do (flatten
+                              (if (atom (cdr elm))
+                                  (list (car elm) (cdr elm))
+                                elm))
+                          else do (and elm (push elm result)))))
       (flatten seq))
     (nreverse result)))
 
 (defun helm-mklist (obj)
-  "If OBJ is a list \(but not lambda\), return itself.
-Otherwise make a list with one element."
-  (if (and (listp obj) (not (functionp obj)))
+  "Return OBJ as a proper list.
+Otherwise make a proper list with one element OBJ.
+Anonymous functions (lambdas) are treated as single elements."
+  (if (and (helm-proper-list-p obj) (not (functionp obj)))
       obj
     (list obj)))
 
@@ -718,10 +934,11 @@ This is a bug in `puthash' which store the printable
 representation of object instead of storing the object itself,
 this to provide at the end a printable representation of
 hashtable itself."
-  (cl-loop with cont = (make-hash-table :test test)
-           for elm in seq
-           unless (gethash elm cont)
-           collect (puthash elm elm cont)))
+  (let ((table (make-hash-table :test test)))
+    (mapcan (lambda (x)
+              (unless (gethash x table)
+                (list (puthash x x table))))
+            seq)))
 
 (defsubst helm--string-join (strings &optional separator)
   "Join all STRINGS using SEPARATOR."
@@ -749,7 +966,7 @@ hashtable itself."
   (helm-awhile (helm-basedir (directory-file-name
                               (expand-file-name directory)))
     ;; Break at root to avoid infloop, root is / or on Windows
-    ;; C:/ i.e. <volume>:/ (issue #2308).
+    ;; C:/ i.e. <volume>:/ (Bug#2308).
     (when (string-match-p "\\`[A-Za-z]?:?/\\'" it)
       (cl-return nil))
     (when (cl-loop for r in black-list
@@ -790,39 +1007,91 @@ hashtable itself."
            unless (string-match-p regexp str)
            collect s))
 
-(defun helm-transform-mapcar (function args)
-  "`mapcar' for candidate-transformer.
+(defun helm-transform-mapcar (fn seq)
+  "Apply function FN on all elements of list SEQ.
+When SEQ is a list of cons cells apply FN on the cdr of each element,
+keeping their car unmodified.
 
-ARGS is (cand1 cand2 ...) or ((disp1 . real1) (disp2 . real2) ...)
+Examples:
 
-\(helm-transform-mapcar 'upcase '(\"foo\" \"bar\"))
-=> (\"FOO\" \"BAR\")
-\(helm-transform-mapcar 'upcase '((\"1st\" . \"foo\") (\"2nd\" . \"bar\")))
-=> ((\"1st\" . \"FOO\") (\"2nd\" . \"BAR\"))
+    (helm-transform-mapcar \\='upcase \\='(\"foo\" \"bar\"))
+    => (\"FOO\" \"BAR\")
+    (helm-transform-mapcar \\='upcase \\='((\"1st\" . \"foo\") (\"2nd\" . \"bar\")))
+    => ((\"1st\" . \"FOO\") (\"2nd\" . \"BAR\"))
 "
-  (cl-loop for arg in args
-        if (consp arg)
-        collect (cons (car arg) (funcall function (cdr arg)))
-        else
-        collect (funcall function arg)))
+  (cl-loop for elm in seq
+           if (consp elm)
+           collect (cons (car elm) (funcall fn (cdr elm)))
+           else
+           collect (funcall fn elm)))
 
 (defun helm-append-at-nth (seq elm index)
-  "Append ELM at INDEX in SEQ."
-  (let ((len (length seq)))
-    (setq index (min (max index 0) len))
-    (if (zerop index)
-        (append elm seq)
-      (cl-loop for i in seq
-               for count from 1 collect i
-               when (= count index)
-               if (listp elm) append elm
-               else collect elm))))
+  "Append ELM at INDEX in SEQ.
+When INDEX is > to the SEQ length ELM is added at end of SEQ.
+When INDEX is 0 or negative, ELM is added at beginning of SEQ.
 
-(defun helm-take-first-elements (seq n)
+Examples:
+
+    (helm-append-at-nth \\='(a b c d) \\='(z) 2)
+    =>(a b z c d)
+
+    (helm-append-at-nth \\='(a b c d) \\='((x . 1) (y . 2)) 2)
+    =>(a b (x . 1) (y . 2) c d)
+
+    (helm-append-at-nth \\='((a . 1) (b . 2) (c . 3)) \\='(x . 1) 1)
+    =>((a . 1) (x . 1) (b . 2) (c . 3))
+"
+  (setq index (min (max index 0) (length seq))
+        elm   (helm-mklist elm))
+  (if (zerop index)
+      (append elm seq)
+    (let* ((end-part (nthcdr index seq))
+           (len      (length end-part))
+           (beg-part (butlast seq len)))
+      (append beg-part elm end-part))))
+
+;;;###autoload
+(defun helm-add-to-list (var elm index &optional replace)
+  "Add or move ELM to the value of VAR at INDEX unless already here.
+
+If ELM is member of var value and at index INDEX, return var value
+unchanged, if INDEX value is different move ELM at this `nth' INDEX value.
+If ELM is not present in list add it at `nth' INDEX.
+
+If REPLACE is non nil replace element at INDEX by ELM.
+
+Do not use this function in helm code, use `helm-append-at-nth'
+instead.  It is meant to be used in config files only."
+  (cl-assert (boundp var) nil "Unbound variable `%s'" var)
+  (let ((val (symbol-value var))
+        flag)
+    (cond ((and (member elm val) (equal elm (nth index val))))
+          ((member elm val)
+           (setq val (delete elm val) flag t))
+          ((and replace (not (< index 0)) (not (> index (length val))))
+             (setq val (delete (nth index val) val) flag t))
+          (t (setq flag t)))
+    (if flag
+        (set var (helm-append-at-nth val elm index))
+      val)))
+
+(cl-defgeneric helm-take (seq n)
   "Return the first N elements of SEQ if SEQ is longer than N.
 It is used for narrowing list of candidates to the
 `helm-candidate-number-limit'."
   (if (> (length seq) n) (cl-subseq seq 0 n) seq))
+
+(cl-defmethod helm-take ((seq list) n)
+  "`helm-take' optimized for lists."
+  (let ((store '()))
+    (if (> n (length seq))
+        seq
+      (while (> (1+ (cl-decf n)) 0)
+        (push (pop seq) store))
+      (nreverse store))))
+
+(defalias 'helm-take-first-elements 'helm-take)
+(make-obsolete 'helm-take-first-elements 'helm-take "3.9.1")
 
 (defun helm-source-by-name (name &optional sources)
   "Get a Helm source in SOURCES by NAME.
@@ -839,27 +1108,108 @@ to `helm-sources'."
            thereis (and (string= name (assoc-default 'name source)) source)))
 
 (defun helm-make-actions (&rest args)
-  "Build an alist with (NAME . ACTION) elements with each pairs in ARGS.
-Where NAME is a string or a function returning a string or nil
-and ACTION a function.
-If NAME returns nil the pair is skipped.
+  "Build an alist with (NAME-OR-FN . ACTION) elements with each pairs in ARGS.
+Where NAME-OR-FN is a string or a function returning a string or nil and
+ACTION a function.  The string provided by NAME-OR-FN can include
+`substitute-command-keys' annotations with \"<%s>\" as the keymap
+specification which will be replaced by the keymap in use in current
+source.  If NAME-OR-FN returns nil the pair is skipped.
 
-\(fn NAME ACTION ...)"
+\(fn NAME-OR-FN ACTION ...)"
   (cl-loop for (name fn) on args by #'cddr
            when (functionp name)
            do (setq name (funcall name))
            when name
            collect (cons name fn)))
+
+(defun helm-closest-number-in-list (num list)
+  "Return closest number to NUM found in LIST.
+LIST is a list of numbers and NUM a number."
+  (cl-loop for i in list
+           for diff = (if (> num i) (- num i) (- i num))
+           collect (cons diff i) into res
+           minimize diff into min
+           finally return (cdr (assq min res))))
+
+(defun helm-group-candidates-by (candidates function &optional selection separate)
+  "Group similar items in CANDIDATES according to FUNCTION.
+Items not matching FUNCTION are grouped as well in a separate group.
+
+Example:
+
+    (setq B \\='(1 2 3 4 5 6 7 8 9))
+
+    (helm-group-candidates-by B #\\='cl-oddp 2 \\='separate)
+    => ((2 4 6 8) (1 3 5 7 9))
+
+SELECTION specify where to start in CANDIDATES.
+Similar candidates to SELECTION will be listed on top.
+
+If SEPARATE is non-nil returns a list of groups i.e. a list of lists,
+otherwise a plain list is returned."
+  (cl-loop with sel = (or selection (helm-get-selection) "")
+           with lst = (copy-sequence candidates)
+           while lst
+           for group = (cl-loop for c in lst
+                                when (equal (funcall function c)
+                                            (funcall function sel))
+                                collect c into grp
+                                and do (setq lst (delete c lst))
+                                finally return (prog1 grp
+                                                 (setq sel (car lst))))
+           if separate collect group
+           else append group))
+
+(defun helm-reorganize-sequence-from-elm (sequence elm &optional reverse)
+  "Reorganize SEQUENCE from ELM.
+
+Examples:
+
+    (helm-reorganize-sequence-from-elm \\='(a b c d e f g h i j k l) \\='e)
+    => (f g h i j k l a b c d e)
+    (helm-reorganize-sequence-from-elm \\='(a b c d e f g h i j k l) \\='e t)
+    => (d c b a l k j i h g f e)
+"
+  (let* ((new-seq  (if reverse
+                       (reverse sequence)
+                     sequence))
+         (pos      (1+ (helm-position elm new-seq :test 'equal))))
+    (append (nthcdr pos new-seq) (helm-take new-seq pos))))
+
+(cl-defun helm-position (elm seq &key (test 'eq) from-end)
+  "Return position of ELM in SEQ.
+Comparison is tested with keyword TEST which default to `eq'.
+If keyword FROM-END is non nil search from end."
+  (let ((count (if from-end (1- (length seq)) 0)))
+    (while (if from-end
+               (not (zerop count))
+             (<= count (1- (length seq))))
+      (when (funcall test (if (listp seq)
+                              (car (nthcdr count seq))
+                            (aref seq count))
+                     elm)
+        (cl-return-from helm-position count))
+      (setq count (funcall (if from-end #'1- #'1+) count)))))
+
+(defsubst helm-copy-sequence (seq)
+  "Return a copy of SEQ.
+When the elements of SEQ are strings, they are
+copied; they are not shared with the original.
+Otherwise returns SEQ unchanged, the elements are not copied."
+  (cl-loop for elm in seq collect
+           (if (stringp elm)
+               (copy-sequence elm)
+             elm)))
 
 ;;; Strings processing.
 ;;
 (defun helm-stringify (elm)
   "Return the representation of ELM as a string.
 ELM can be a string, a number or a symbol."
-  (cl-typecase elm
-    (string elm)
-    (number (number-to-string elm))
-    (symbol (symbol-name elm))))
+  (helm-acase elm
+    ((guard* (stringp it)) it)
+    ((guard* (numberp it)) (number-to-string it))
+    ((guard* (symbolp it)) (symbol-name it))))
 
 (defun helm-substring (str width)
   "Return the substring of string STR from 0 to WIDTH.
@@ -868,7 +1218,7 @@ Handle multibyte characters by moving by columns."
     (save-excursion
       (insert str))
     (move-to-column width)
-    (buffer-substring (point-at-bol) (point))))
+    (buffer-substring (pos-bol) (point))))
 
 (defun helm-substring-by-width (str width &optional endstr)
   "Truncate string STR to end at column WIDTH.
@@ -889,11 +1239,15 @@ than WIDTH."
 
 (defun helm-get-pid-from-process-name (process-name)
   "Get pid from running process PROCESS-NAME."
-  (cl-loop with process-list = (list-system-processes)
-        for pid in process-list
-        for process = (assoc-default 'comm (process-attributes pid))
-        when (and process (string-match process-name process))
-        return pid))
+  ;; Protect system processes calls (Issue #2497)
+  ;; Ensure `list-system-processes' and `process-attributes' don't run
+  ;; on remote (only Emacs-28/29+).
+  (cl-loop with default-directory = temporary-file-directory
+           with process-list = (list-system-processes)
+           for pid in process-list
+           for process = (assoc-default 'comm (process-attributes pid))
+           when (and process (string-match process-name process))
+           return pid))
 
 (defun helm-ff-find-printers ()
   "Return a list of available printers on Unix systems."
@@ -915,7 +1269,7 @@ than WIDTH."
 
 (defun helm-current-line-contents ()
   "Current line string without properties."
-  (buffer-substring-no-properties (point-at-bol) (point-at-eol)))
+  (buffer-substring-no-properties (pos-bol) (pos-eol)))
 
 (defun helm--replace-regexp-in-buffer-string (regexp rep str &optional fixedcase literal subexp start)
   "Replace REGEXP by REP in string STR.
@@ -925,10 +1279,12 @@ function with SUBEXP specified.
 
 E.g.:
 
-    (helm--replace-regexp-in-buffer-string \"e\\\\(m\\\\)acs\" 'upcase \"emacs\" t nil 1)
+    (helm--replace-regexp-in-buffer-string
+     \"e\\\\(m\\\\)acs\" \\='upcase \"emacs\" t nil 1)
     => \"eMacs\"
 
-    (replace-regexp-in-string \"e\\\\(m\\\\)acs\" 'upcase \"emacs\" t nil 1)
+    (replace-regexp-in-string
+     \"e\\\\(m\\\\)acs\" \\='upcase \"emacs\" t nil 1)
     => \"eEMACSacs\"
 
 Also START argument behaves as expected unlike
@@ -977,7 +1333,8 @@ behaviour of this function is really needed."
       (goto-char (point-min)))
     (decode-coding-string (buffer-string) 'utf-8)))
 
-(defun helm-read-answer (prompt answer-list)
+(cl-defun helm-read-answer (prompt answer-list
+                            &optional (help 'helm-read-answer-default-help-fn))
   "Prompt user for an answer.
 Arg PROMPT is the prompt to present user the different possible
 answers, ANSWER-LIST is a list of strings.
@@ -985,48 +1342,166 @@ If user enters an answer which is one of ANSWER-LIST return this
 answer, otherwise keep prompting for a valid answer.
 Note that answer should be a single char, only short answer are
 accepted.
+When HELP is provided, it is a string or a function that returns a string
+which will be displayed in a buffer when \"h\"
+is pressed (don't forget to add \"h\" in prompt).
 
 Example:
 
-    (let ((answer (helm-read-answer
-                    \"answer [y,n,!,q]: \"
-                    '(\"y\" \"n\" \"!\" \"q\"))))
-      (pcase answer
-          (\"y\" \"yes\")
-          (\"n\" \"no\")
-          (\"!\" \"all\")
-          (\"q\" \"quit\")))
+     (helm-acase (helm-read-answer
+                 \"answer [y,n,!,q,h]: \"
+                 \\='(\"y\" \"n\" \"!\" \"q\"))
+      (\"y\" \"yes\")
+      (\"n\" \"no\")
+      (\"!\" \"all\")
+      (\"q\" \"quit\"))
 
 "
-  (helm-awhile (read-key (propertize prompt 'face 'minibuffer-prompt))
-    (let ((str (and (characterp it) (string it))))
-      (if (and str (member str answer-list))
-          (cl-return str)
-        (message "Please answer by %s" (mapconcat 'identity answer-list ", "))
-        (sit-for 1)))))
+  (unwind-protect
+       (helm-awhile (read-key (propertize
+                               prompt 'face 'minibuffer-prompt))
+         (let ((str (and (characterp it) (string it)))
+               (choices (remove "h" answer-list)))
+           (cond ((and str (member str choices))
+                  (cl-return str))
+                 ((and help (string= str "h"))
+                  (helm-aif (get-buffer-window "*choices help*" 'visible)
+                      (quit-window t it)
+                    (with-current-buffer-window "*choices help*"
+                        '(display-buffer-at-bottom
+                          (window-height . fit-window-to-buffer)
+                          (preserve-size . (nil . t)))
+                        nil (progn
+                              (insert (if (functionp help)
+                                          (funcall help) help))
+                              (setq-local cursor-type nil)))))
+                 (t (message "Please answer by %s"
+                             (mapconcat 'identity choices ", "))
+                    (sit-for 1)))))
+    (helm-aand help (get-buffer-window "*choices help*") (quit-window t it))))
+
+(defun helm-read-answer-default-help-fn ()
+  "Return a string suitable for `helm-read-answer' help."
+  (with-temp-buffer
+    (save-excursion
+      (insert "y: yes\n"
+              "n: no\n"
+              "!: yes for all\n"
+              "q: quit\n"
+              "h: toggle this help"))
+    (while (re-search-forward "^\\(.\\):" nil t)
+      (helm-add-face-text-properties (match-beginning 1) (match-end 1)
+                                     'font-lock-variable-name-face))
+    (buffer-string)))
+
+(defun helm-read-answer-dolist-with-action (prompt list action
+                                            &optional
+                                              prompt-formater
+                                              help-function)
+  "Read answer with PROMPT and execute ACTION on each element of LIST.
+
+Argument PROMPT is a format spec string e.g. \"Do this on %s?\"
+which take each elements of LIST as argument, no need to provide
+the help part i.e. [y,n,!,q] it will be already added.
+
+While looping through LIST, ACTION is executed on each elements
+differently depending of answer:
+
+- y  Execute ACTION on element.
+- n  Skip element.
+- !  Don't ask anymore and execute ACTION on remaining elements.
+- q  Skip all remaining elements.
+
+PROMPT-FORMATER may be a function or a list containing strings and
+functions.  Functions either in list or alone are called on each element
+in LIST to be displayed in PROMPT."
+  (let (dont-ask)
+    (catch 'break
+      (dolist (elm list)
+        (if dont-ask
+            (funcall action elm)
+          (helm-acase (helm-read-answer
+                       (apply #'format
+                              (concat prompt "[y,n,!,q,h]")
+                              (helm-acase prompt-formater
+                                ((guard* (consp it))
+                                 (mapcar (lambda (x)
+                                           (if (functionp x)
+                                               (funcall x elm)
+                                             x))
+                                         it))
+                                ((guard* (functionp it))
+                                 (list (funcall it elm)))
+                                (t (list elm))))
+                       '("y" "n" "!" "q")
+                       (or help-function #'helm-read-answer-default-help-fn))
+            ("y" (funcall action elm))
+            ("n" (ignore))
+            ("!" (prog1
+                     (funcall action elm)
+                   (setq dont-ask t)))
+            ("q" (throw 'break nil))))))))
+
+(defsubst helm-string-numberp (str)
+  "Return non nil if string STR represent a number."
+  (cl-assert (stringp str) t)
+  (cl-loop with chars = '(?0 ?1 ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9)
+           for c across str always (memql c chars)))
+
+(defsubst helm-re-search-forward (regexp &optional bound noerror count)
+  "Same as `re-search-forward' but return nil when point doesn't move.
+This avoid possible infloop when a wrong regexp is entered in minibuffer."
+  ;; See Issue#2652 and Issue#2653.
+  (let ((pos (point)))
+    (helm-acase (re-search-forward regexp bound noerror count)
+      ((guard* (eql it pos)) nil)
+      (t it))))
 
 ;;; Symbols routines
 ;;
 (defun helm-symbolify (str-or-sym)
   "Get symbol of STR-OR-SYM."
-  (cond ((symbolp str-or-sym)
-         str-or-sym)
-        ((equal str-or-sym "") nil)
-        (t (intern str-or-sym))))
+  (helm-acase str-or-sym
+    ((guard* (symbolp it)) it)
+    ("" nil)
+    (t (intern it))))
 
 (defun helm-symbol-name (obj)
-  (if (or (and (consp obj) (functionp obj))
-          (byte-code-function-p obj))
+  "Return name of OBJ.
+If object is a lambda, return \"Anonymous\"."
+  ;; lambdas are no more represented as list in
+  ;; Emacs-29+ Bug#2666.
+  (if (or (and (not (symbolp obj)) (functionp obj))
+          (byte-code-function-p obj)
+          (helm-subr-native-elisp-p obj))
       "Anonymous"
-      (symbol-name obj)))
+    (symbol-name obj)))
 
 (defun helm-describe-class (class)
   "Display documentation of Eieio CLASS, a symbol or a string."
-  (advice-add 'cl--print-table :override #'helm-source--cl--print-table '((depth . 100)))
-  (unwind-protect
-       (let ((helm-describe-function-function 'describe-function))
-         (helm-describe-function class))
-    (advice-remove 'cl--print-table #'helm-source--cl--print-table)))
+  (cl-letf (((symbol-function 'cl--print-table)
+             #'helm-source--cl--print-table))
+    (if (fboundp 'cl-describe-type)
+        (cl-describe-type (helm-symbolify class))
+      (let ((helm-describe-function-function 'describe-function))
+        (helm-describe-function (helm-symbolify class))))))
+
+(defun helm-elisp-collect-slots-in-class (class)
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'cl--print-table)
+               #'helm-source--cl--print-table))
+      (cl--describe-class-slots (cl--find-class class))
+      (goto-char (point-min))
+      (cl-loop while (re-search-forward "^\\* \\(.*\\)" nil t)
+               for name = (match-string 1)
+               for doc = (save-excursion
+                           (forward-line 1)
+                           (let ((beg (point))
+                                 (end (when (re-search-forward "^\\*" nil t)
+                                        (1- (match-beginning 0)))))
+                             (when (and beg end)
+                               (buffer-substring beg end))))
+               collect (cons name (concat "* " name "\n" doc))))))
 
 (defun helm-describe-function (func)
   "Display documentation of FUNC, a symbol or string."
@@ -1038,6 +1513,12 @@ Example:
   (cl-letf (((symbol-function 'message) #'ignore))
     (funcall helm-describe-variable-function (helm-symbolify var))))
 
+(defun helm-describe-symbol (sym)
+  "Display documentation of SYM, a symbol or a string."
+  (cl-letf (((symbol-function 'message) #'ignore))
+    (let ((helm-describe-function-function 'describe-symbol))
+      (funcall helm-describe-function-function (helm-symbolify sym)))))
+
 (defun helm-describe-face (face)
   "Display documentation of FACE, a symbol or a string."
   (let ((faces (helm-marked-candidates)))
@@ -1045,6 +1526,97 @@ Example:
       (describe-face (if (cdr faces)
                          (mapcar 'helm-symbolify faces)
                          (helm-symbolify face))))))
+
+(defun helm-describe-re-char-classes-1 (exp)
+  (helm-acase exp
+             (":xdigit:"
+              (format "%s
+This matches the hexadecimal digits.
+‘0’ through ‘9’, ‘a’ through ‘f’ and ‘A’ through ‘F’." it))
+             (":word:"
+              (format "%s
+This matches any character that has word syntax.
+Note that the syntax of a character, and thus which characters are considered
+“word-constituent”, depends on the major mode." it))
+             (":upper:"
+              (format "%s
+This matches any upper-case letter.
+It is determined by the current case table.
+If ‘case-fold-search’ is non-‘nil’, this
+also matches any lower-case letter.  Note that a buffer can have
+its own local case table different from the default one." it))
+             (":unibyte:"
+              (format "%s
+This matches any unibyte character." it))
+             (":space:"
+              (format "%s
+This matches any character that has whitespace syntax.
+Note that the syntax of a character, and thus
+which characters are considered “whitespace”, depends on the major mode." it))
+             (":punct:"
+              (format "%s
+This matches any punctuation character.
+At present, for multibyte characters, it matches anything that has non-word syntax,
+and thus its exact definition can vary from one major mode to another, since
+the syntax of a character depends on the major mode.)" it))
+             (":print:"
+              (format "%s
+This matches any printing character.
+Either spaces or graphic characters matched by ‘[:graph:]’." it))
+             (":nonascii:"
+              (format "%s
+This matches any non-ASCII character." it))
+             (":multibyte:"
+              (format "%s
+This matches any multibyte character." it))
+             (":lower:"
+              (format "%s
+This matches any lower-case letter.
+It is determined by the current case table.
+If ‘case-fold-search’ is non-‘nil’, this also matches
+any upper-case letter.  Note that a buffer can have its own local
+case table different from the default one." it))
+             (":graph:"
+              (format "%s
+This matches graphic characters.
+Everything except spaces, ASCII and
+non-ASCII control characters, surrogates, and codepoints unassigned
+by Unicode, as indicated by the Unicode ‘general-category’ property." it))
+             (":digit:"
+              (format "%s
+This matches ‘0’ through ‘9’.
+Thus, ‘[-+[:digit:]]’ matches any digit,as well as ‘+’ and ‘-’." it))
+             (":cntrl:"
+              (format "%s
+This matches any cntrl character.
+That is any character whose code is in the range 0–31." it))
+             (":blank:"
+              (format "%s
+This matches horizontal whitespace.
+It is defined by Annex C of the Unicode Technical Standard #18.
+In particular, it matches spaces,tabs,
+and other characters whose Unicode ‘general-category’
+property indicates they are spacing separators." it))
+             (":alpha:"
+              (format "%s
+This matches any letter.
+For multibyte characters, it matches characters
+whose Unicode ‘general-category’ property indicates
+they are alphabetic characters." it))
+             (":alnum:"
+              (format "%s
+This matches any letter or digit.
+For multibyte characters, it matches characters
+whose Unicode ‘general-category’ property
+indicates they are alphabetic or decimal number characters." it))
+             (":ascii:"
+              (format "%s
+This matches any ASCII character (codes 0–127)." it))))
+
+(defun helm-describe-re-char-classes (exp)
+  "Describe Char Classes for regexps."
+  (with-output-to-temp-buffer "*help*"
+    (princ (helm-describe-re-char-classes-1 exp))))
 
 (defun helm-elisp--persistent-help (candidate fun &optional name)
   "Used to build persistent actions describing CANDIDATE with FUN.
@@ -1057,8 +1629,8 @@ See `helm-elisp-show-help'."
             (if name
                 (funcall fun candidate name)
                 (funcall fun candidate)))
-           ((or (and (helm-attr 'help-running-p)
-                     (string= candidate (helm-attr 'help-current-symbol))))
+           ((or (and (helm-get-attr 'help-running-p)
+                     (string= candidate (helm-get-attr 'help-current-symbol))))
             (progn
               ;; When started from a help buffer,
               ;; Don't kill this buffer as it is helm-current-buffer.
@@ -1072,35 +1644,110 @@ See `helm-elisp-show-help'."
                                    (if helm--buffer-in-new-frame-p
                                        helm-current-buffer
                                      helm-persistent-action-window-buffer)))
-              (helm-attrset 'help-running-p nil))
+              (helm-set-attr 'help-running-p nil))
             ;; Force running update hook to may be delete
             ;; helm-persistent-action-display-window, this is done in
-            ;; helm-persistent-action-display-window (the function). 
+            ;; helm-persistent-action-display-window (the function).
             (unless helm--buffer-in-new-frame-p
               (helm-update (regexp-quote (helm-get-selection)))))
            (t
             (if name
                 (funcall fun candidate name)
                 (funcall fun candidate))
-            (helm-attrset 'help-running-p t)))
-    (helm-attrset 'help-current-symbol candidate)))
+            (helm-set-attr 'help-running-p t)))
+    (helm-set-attr 'help-current-symbol candidate)))
+
+(defcustom helm-find-function-default-project nil
+  "Default directories to search symbols definitions from `helm-apropos'.
+A list of directories or a single directory name.
+Helm will allow you selecting one of those directories with `M-n' when
+using a prefix arg with the `find-function' action in `helm-apropos'.
+This is a good idea to add the directory names of the projects you are
+working on to quickly jump to the definitions in the project source
+files instead of jumping to the loaded files located in `load-path'."
+  :type '(choice (repeat string)
+                 string)
+  :group 'helm-elisp)
+
+(defun helm-find-function-noselect (func &optional root-dir type)
+  "Find FUNC definition without selecting buffer.
+FUNC can be a symbol or a string.
+Instead of looking in LOAD-PATH to find library, this function
+search in all subdirs of ROOT-DIR, if ROOT-DIR is unspecified ask for
+it with completion.
+TYPE when nil specify function, for other values see
+`find-function-regexp-alist'."
+  (require 'find-func)
+  (let* ((sym (helm-symbolify func))
+         (dir (or root-dir (helm-read-file-name
+                            "Project directory: "
+                            :test 'file-directory-p
+                            :default (helm-mklist helm-find-function-default-project)
+                            :must-match t)))
+         (find-function-source-path
+          (cons dir (helm-walk-directory dir
+                                         :directories 'only
+                                         :path 'full)))
+         (symbol-lib (helm-acase type
+                       ((defvar defface)
+                        (or (symbol-file sym it)
+                            (help-C-file-name sym 'var)))
+                       ;; Sometimes e.g. with prefix key symbols
+                       ;; `find-function-library' returns a list of only one
+                       ;; element, the symbol itself i.e. no library.
+                       (t (cdr (find-function-library sym)))))
+         (library (and symbol-lib
+                       (find-library-name
+                        (helm-basename symbol-lib t)))))
+    (if library
+        (find-function-search-for-symbol sym type library)
+      (error "Don't know where `%s' is defined" sym))))
 
 (defun helm-find-function (func)
-  "FUNC is symbol or string."
-  (find-function (helm-symbolify func)))
+  "Try to jump to FUNC definition.
+With a prefix arg ask for the project directory to search in instead of
+using LOAD-PATH."
+  (if (not helm-current-prefix-arg)
+      (find-function (helm-symbolify func))
+    (let ((place (helm-find-function-noselect func)))
+      (if (cdr place)
+          (progn
+            (switch-to-buffer (car place)) (goto-char (cdr place)))
+        (helm-aif (car place)
+            (message "Couldn't find Function `%s' in `%s'"
+                     func (buffer-name it))
+          (message "Couldn't find Function `%s'" func))))))
 
 (defun helm-find-variable (var)
-  "VAR is symbol or string."
-  (find-variable (helm-symbolify var)))
+  "Try to jump to VAR definition.
+With a prefix arg ask for the project directory to search in instead of
+using LOAD-PATH."
+  (if (not helm-current-prefix-arg)
+      (find-variable (helm-symbolify var))
+    (let ((place (helm-find-function-noselect var nil 'defvar)))
+      (when place
+        (switch-to-buffer (car place)) (goto-char (cdr place))))))
 
 (defun helm-find-face-definition (face)
-  "FACE is symbol or string."
-  (find-face-definition (helm-symbolify face)))
+  "Try to jump to FACE definition.
+With a prefix arg ask for the project directory to search in instead of
+using LOAD-PATH."
+  (if (not helm-current-prefix-arg)
+      (find-face-definition (helm-symbolify face))
+    (let ((place (helm-find-function-noselect face nil 'defface)))
+      (when place
+        (switch-to-buffer (car place)) (goto-char (cdr place))))))
 
 (defun helm-kill-new (candidate &optional replace)
   "CANDIDATE is symbol or string.
 See `kill-new' for argument REPLACE."
   (kill-new (helm-stringify candidate) replace))
+
+(defun helm-group-p (symbol)
+  "Return non nil when SYMBOL is a group."
+  (or (and (get symbol 'custom-loads)
+           (not (get symbol 'custom-autoload)))
+      (get symbol 'custom-group)))
 
 
 ;;; Modes
@@ -1144,46 +1791,117 @@ Argument ALIST is an alist of associated major modes."
             (eq (car (rassq cdr-o-assoc-mode alist))
                 cur-maj-mode)))))
 
+;;; Source processing
+;;
+(defun helm-map-candidates-in-source (src fn pred)
+  "Map over all candidates in SRC and execute FN if PRED returns non nil.
+Arg FN and PRED are functions called with current display part of
+candidate as arg."
+  (declare (indent 1))
+  (save-excursion
+    (goto-char (helm-get-previous-header-pos))
+    (helm-next-line)
+    (let* ((next-head (helm-get-next-header-pos))
+           (end       (and next-head
+                           (save-excursion
+                             (goto-char next-head)
+                             (forward-line -1)
+                             (point))))
+           (maxpoint  (or end (point-max))))
+      (while (< (point) maxpoint)
+        (helm-select-current-line)
+        (let ((cand (helm-get-selection nil 'withprop src)))
+          (when (funcall pred cand)
+            (funcall fn cand)))
+        (forward-line 1) (end-of-line)))))
+
 ;;; Files routines
 ;;
 (defun helm-file-name-sans-extension (filename)
   "Same as `file-name-sans-extension' but remove all extensions."
   (helm-aif (file-name-sans-extension filename)
-      ;; Start searching at index 1 for files beginning with a dot (#1335).
+      ;; Start searching at index 1 for files beginning with a dot
+      ;; (bug#1335).
       (if (string-match "\\." (helm-basename it) 1)
           (helm-file-name-sans-extension it)
           it)))
 
+(defsubst helm-file-name-extension (file)
+  "Returns FILE extension if it is not a number."
+  (helm-aif (file-name-extension file)
+      (and (not (helm-string-numberp it)) it)))
+
 (defun helm-basename (fname &optional ext)
   "Print FNAME with any leading directory components removed.
 If specified, also remove filename extension EXT.
-Arg EXT can be specified as a string with or without dot, in this
-case it should match `file-name-extension'.
-It can also be non-nil (t) in this case no checking of
-`file-name-extension' is done and the extension is removed
-unconditionally."
-  (let ((non-essential t))
-    (if (and ext (or (string= (file-name-extension fname) ext)
-                     (string= (file-name-extension fname t) ext)
-                     (eq ext t))
-             (not (file-directory-p fname)))
-        (file-name-sans-extension (file-name-nondirectory fname))
-      (file-name-nondirectory (directory-file-name fname)))))
+If FNAME is a directory EXT arg is ignored.
 
-(defun helm-basedir (fname)
-  "Return the base directory of filename ending by a slash."
+Arg EXT can be specified as a string, a number or `t' .
+When specified as a string, this string is stripped from end of FNAME.
+e.g. (helm-basename \"tutorial.el.gz\" \".el.gz\") => tutorial.
+When `t' no checking of `file-name-extension' is done and the first
+extension is removed unconditionally with `file-name-sans-extension'.
+e.g. (helm-basename \"tutorial.el.gz\" t) => tutorial.el.
+When a number, remove that many times extensions from FNAME until FNAME ends
+with its real extension which is by default \".el\".
+e.g. (helm-basename \"tutorial.el.gz\" 2) => tutorial
+To specify the extension where to stop use a cons cell where the cdr is a regexp
+matching extension e.g. (2 . \\\\.py$).
+e.g. (helm-basename \"~/ucs-utils-6.0-delta.py.gz\" \\='(2 . \"\\\\.py\\\\\\='\"))
+=>ucs-utils-6.0-delta."
+  (let ((non-essential t)
+        (ext-regexp (cond ((consp ext) (cdr ext))
+                          ((numberp ext) "\\.el\\'")
+                          (t ext)))
+        result)
+    (cond ((or (null ext) (file-directory-p fname))
+           (file-name-nondirectory (directory-file-name fname)))
+          ((or (numberp ext) (consp ext))
+           (cl-dotimes (_ (if (consp ext) (car ext) ext))
+             (let ((bn (file-name-nondirectory (or result fname))))
+               (helm-aif (file-name-sans-extension bn)
+                   (if (string-match-p ext-regexp bn)
+                       (cl-return (setq result (file-name-sans-extension bn)))
+                     (setq result (file-name-sans-extension bn))))))
+           result)
+          ((eq t ext)
+           (file-name-sans-extension (file-name-nondirectory fname)))
+          ((stringp ext)
+           (replace-regexp-in-string (concat (regexp-quote ext) "\\'") ""
+                                     (file-name-nondirectory fname))))))
+
+(defun helm-basedir (fname &optional parent)
+  "Return the base directory of FNAME ending by a slash.
+If PARENT is non nil and FNAME is a directory return the parent
+directory of FNAME, if PARENT is a number return the parent directory up to
+PARENT level.
+If PARENT is not specified but FNAME doesn't end by a slash, the returned value
+is same as with PARENT."
   (helm-aif (and fname
                  (or (and (string= fname "~") "~")
-                     (file-name-directory fname)))
+                     (file-name-directory
+                      (helm-acase parent
+                        ((guard* (numberp it))
+                         (cl-loop repeat it
+                                  for bd = (helm-basedir (or bd fname) t)
+                                  finally return bd))
+                        ((guard* (eq it t))
+                         (directory-file-name fname))
+                        (t fname)))))
       (file-name-as-directory it)))
 
 (defun helm-current-directory ()
   "Return current-directory name at point.
-Useful in dired buffers when there is inserted subdirs."
+It is done according to `helm-current-directory-alist'.
+If nothing found try to use the directory handling `buffer-file-name' and
+finally fallback to `default-directory'."
   (expand-file-name
-   (if (eq major-mode 'dired-mode)
-       (dired-current-directory)
-       default-directory)))
+   (helm-acase major-mode
+     ((guard* (assoc-default it helm-current-directory-alist))
+      (helm-interpret-value guard))
+     (t (helm-aif (buffer-file-name)
+            (file-name-directory it)
+          default-directory)))))
 
 (defun helm-shadow-boring-files (files)
   "Files matching `helm-boring-file-regexp' will be
@@ -1311,7 +2029,12 @@ Directories expansion is not supported."
                              :skip-subdirs t)
       (helm-aif (helm-wildcard-to-regexp bn)
           (directory-files (helm-basedir pattern) full it)
-        (file-expand-wildcards pattern full)))))
+        ;; `file-expand-wildcards' fails to expand weird directories
+        ;; like "[ foo.zz ] bar.*.avi", fallback to `directory-files'
+        ;; in such cases.
+        (or (file-expand-wildcards pattern full)
+            (directory-files (helm-basedir pattern)
+                             full (wildcard-to-regexp bn)))))))
 
 (defun helm-wildcard-to-regexp (wc)
   "Transform wilcard WC like \"**.{jpg,jpeg}\" in REGEXP."
@@ -1319,6 +2042,79 @@ Directories expansion is not supported."
     (format ".*\\.\\(%s\\)$"
             (replace-regexp-in-string
              "," "\\\\|" (match-string 2 wc)))))
+
+(defun helm-locate-lib-get-summary (file)
+  "Extract library description from FILE."
+  (with-temp-buffer
+    (let (desc)
+      (cl-letf (((symbol-function 'message) #'ignore))
+        (insert-file-contents file nil 0 128))
+      (goto-char (point-min))
+      (when (re-search-forward "^;;;?\\(.*\\) ---? \\(.*\\)" (pos-eol) t)
+        (setq desc (match-string-no-properties 2)))
+      (if (or (null desc) (string= "" desc)
+              ;; Fix issue#2716 with an header line like
+              ;; ";; foo --- -*-[...]" i.e. desc is not provided.
+              (string-match "\\`-\\*-" desc))
+          "Not documented"
+        (car (split-string desc "-\\*-" nil "[ \t\n\r-]+"))))))
+
+(defun helm-local-directory-files (directory &rest args)
+  "Run `directory-files' without tramp file name handlers.
+Take same args as `directory-files'."
+  (require 'tramp)
+  (let ((file-name-handler-alist
+         (cl-loop for (re . sym) in file-name-handler-alist
+                  unless (and (symbolp sym)
+                              (string-prefix-p "tramp-" (symbol-name sym)))
+                  collect `(,re . ,sym)))
+       tramp-mode)
+    ;; Avoid error with 5nth arg COUNT which is not available in previous Emacs,
+    ;; at least 27.1, see bug#2662.
+    (apply #'directory-files directory args)))
+
+(defun helm-common-str-1 (files &optional dirp)
+  "Find the common string or directory in FILES.
+When DIRP is non nil return the common part which is a directory."
+  (if (cdr files)
+      (cl-loop with base = (car files)
+               with others = nil
+               for file in files
+               for cpart = (if dirp
+                               (helm-acase (fill-common-string-prefix base file)
+                                 ((guard* (and it (file-directory-p it))) it)
+                                 (t (and it (file-name-directory it))))
+                             (fill-common-string-prefix base file))
+               if cpart
+               do (setq base cpart)
+               else do (push file others)
+               finally return (if (and others base)
+                                  (nconc (list (directory-file-name base))
+                                         (helm-common-str-1 others))
+                                (list (and base (directory-file-name base)))))
+    (and files (list (directory-file-name
+                      (file-name-directory (car files)))))))
+
+(defun helm-common-dir (files)
+  "Return the longest common directory path of FILES list.
+If FILES are not all common to the same drive (Windows) a list of
+common directory is returned."
+  (let ((result (helm-common-str-1 files t)))
+    (if (cdr result) result (car result))))
+
+;; Tests:
+;; (helm-common-dir '("c:/foo" "c:/foo/bar/baz"
+;;                    "f:/foo" "e:/foo" "f:/foo/bar"
+;;                    "d:/foo" "d:/foo/bar/baz"
+;;                    "e:/foo/bar/baz"))
+;; ("c:/foo" "e:/foo" "f:/foo" "d:/foo")
+
+
+;; (helm-common-dir '("/home/you/download/foo/"
+;;                    "/home/you/download/foo/bar/baz"
+;;                    "/home/you/tmp/foo"))
+;; "/home/you"
+
 
 ;;; helm internals
 ;;
@@ -1326,8 +2122,12 @@ Directories expansion is not supported."
   "Set minibuffer contents to PATTERN.
 If optional NOUPDATE is non-nil, the Helm buffer is not changed."
   (with-selected-window (or (active-minibuffer-window) (minibuffer-window))
-    (delete-minibuffer-contents)
-    (insert pattern))
+    ;; Minibuffer may have a read-only string when using completion-in-region,
+    ;; which prevent inserting in minibuffer.  see
+    ;; `helm-mode--completion-in-region-initial-input'.
+    (let ((inhibit-read-only t))
+      (delete-minibuffer-contents)
+      (insert pattern)))
   (when noupdate
     (setq helm-pattern pattern)))
 
@@ -1340,7 +2140,8 @@ That is what completion commands operate on."
   "Eval BODY inside `helm-buffer'."
   (declare (indent 0) (debug t))
   `(with-current-buffer (helm-buffer-get)
-     ,@body))
+     (let ((inhibit-read-only t))
+       ,@body)))
 
 (defmacro with-helm-current-buffer (&rest body)
   "Eval BODY inside `helm-current-buffer'."
@@ -1369,7 +2170,8 @@ That is what completion commands operate on."
   "Be sure BODY is excuted in the helm window."
   (declare (indent 0) (debug t))
   `(with-selected-window (helm-window)
-     ,@body))
+     (let ((inhibit-read-only t))
+       ,@body)))
 
 (defmacro helm-without-follow (&rest body)
   "Ensure BODY runs without following.
@@ -1380,6 +2182,16 @@ I.e. when using `helm-next-line' and friends in BODY."
     (let (helm-follow-mode-persistent)
       (progn ,@body))))
 
+(defun helm-candidate-prefixed-p (candidate)
+  "Return non nil when CANDIDATE is prefixed.
+
+Candidates files are prefixed with [+] or a specific icon when candidate is a
+non existing file, in other places candidates may be prefixed with an unknown
+symbol [?], these candidate have the text property <helm-new-file> or <unknown>
+property."
+  (or (get-text-property 0 'helm-new-file candidate)
+      (get-text-property 0 'unknown candidate)))
+
 ;; Completion styles related functions
 ;;
 (defun helm--setup-completion-styles-alist ()
@@ -1389,7 +2201,7 @@ I.e. when using `helm-next-line' and friends in BODY."
               completion-styles-alist
               :test 'equal)
   (unless (assq 'flex completion-styles-alist)
-    ;; Add helm-fuzzy style only if flex is not available.
+    ;; Add helm-flex style only if flex is not available.
     (cl-pushnew '(helm-flex helm-flex-completion-try-completion
                             helm-flex-completion-all-completions
                             "helm flex completion style.\nProvide flex matching for emacs-26.")
@@ -1397,118 +2209,62 @@ I.e. when using `helm-next-line' and friends in BODY."
                 :test 'equal)))
 
 (defvar helm-blacklist-completion-styles '(emacs21 emacs22))
-(defun helm--prepare-completion-styles (&optional nomode styles)
+(defun helm--prepare-completion-styles (&optional com-or-mode styles)
   "Return a suitable list of styles for `completion-styles'.
 
 When `helm-completion-style' is not `emacs' the Emacs vanilla
 default `completion-styles' is used except for
 `helm-dynamic-completion' which uses inconditionally `emacs' as
 value for `helm-completion-style'.
- 
+
 If styles are specified in `helm-completion-styles-alist' for a
-particular mode, use these styles unless NOMODE is non nil.
+particular mode, use these styles for the corresponding mode.
+If COM-OR-MODE (a mode or a command) is specified it is used to find the
+corresponding styles in `helm-completion-styles-alist'.
+
 If STYLES is specified as a list of styles suitable for
 `completion-styles' these styles are used in the given order.
 Otherwise helm style is added to `completion-styles' always after
 flex or helm-flex completion style if present."
   ;; For `helm-completion-style' and `helm-completion-styles-alist'.
   (require 'helm-mode)
-  (if (memq helm-completion-style '(helm helm-fuzzy))
-      ;; Keep default settings, but probably nil is fine as well.
-      '(basic partial-completion emacs22)
-    (or
-     styles
-     (pcase (and (null nomode)
-                 (with-helm-current-buffer
-                   (cdr (assq major-mode helm-completion-styles-alist))))
-       (`(,_l . ,ll) ll))
-     ;; We need to have flex always behind helm, otherwise
-     ;; when matching against e.g. '(foo foobar foao frogo bar
-     ;; baz) with pattern "foo" helm style if before flex will
-     ;; return foo and foobar only defeating flex that would
-     ;; return foo foobar foao and frogo.
-     (let* ((wflex (car (or (assq 'flex completion-styles-alist)
-                            (assq 'helm-flex completion-styles-alist))))
-            (styles (append (and (memq wflex completion-styles)
-                                 (list wflex))
-                            (cl-loop for s in completion-styles
-                                     unless (or (memq s helm-blacklist-completion-styles)
-                                                (memq wflex completion-styles))
-                                     collect s))))
-       (helm-append-at-nth
-        styles '(helm)
-        (if (memq wflex completion-styles)
-            1 0))))))
+  (let ((from (if com-or-mode com-or-mode major-mode)))
+    (if (memq helm-completion-style '(helm helm-fuzzy))
+        ;; Keep default settings, but probably nil is fine as well.
+        '(basic partial-completion emacs22)
+      (or
+       styles
+       (helm-acase (cdr (assq from helm-completion-styles-alist))
+         ((dst* (_l &rest args)) args))
+       ;; We need to have flex always behind helm, otherwise
+       ;; when matching against e.g. '(foo foobar foao frogo bar
+       ;; baz) with pattern "foo" helm style if before flex will
+       ;; return foo and foobar only defeating flex that would
+       ;; return foo foobar foao and frogo.
+       (let* ((wflex (car (or (assq 'flex completion-styles-alist)
+                              (assq 'helm-flex completion-styles-alist))))
+              (styles (append (and (memq wflex completion-styles)
+                                   (list wflex))
+                              (cl-loop for s in completion-styles
+                                       unless (or (memq s helm-blacklist-completion-styles)
+                                                  (memq wflex completion-styles))
+                                       collect s))))
+         (helm-append-at-nth
+          styles '(helm)
+          (if (memq wflex completion-styles)
+              1 0)))))))
 
-(defun helm-dynamic-completion (collection predicate &optional point metadata nomode styles)
-  "Build a function listing the possible completions of `helm-pattern' in COLLECTION.
-
-Only the elements of COLLECTION that satisfy PREDICATE are considered.
-
-Argument POINT is the same as in `completion-all-completions' and
-is meaningful only when using some kind of `completion-at-point'.
-
-The return value is a list of completions that may be sorted by
-the sort function provided by the completion-style in
-use (emacs-27 only), otherwise (emacs-26) the sort function has
-to be provided if needed either with an FCT function in source or
-by passing the sort function with METADATA
-E.g.: (metadata (display-sort-function . foo)).
-
-If you don't want the sort fn provided by style to kick
-in (emacs-27) you can use as metadata value the symbol `nosort'.
-
-Example:
-
-    (helm :sources (helm-build-sync-source \"test\"
-                     :candidates (helm-dynamic-completion
-                                  '(foo bar baz foab)
-                                  'symbolp)
-                     :match-dynamic t)
-          :buffer \"*helm test*\")
-
-When argument NOMODE is non nil don't use `completion-styles' as
-specified in `helm-completion-styles-alist' for specific modes.
-
-When STYLES is specified use these `completion-styles', see
-`helm--prepare-completion-styles'.
-
-Also `helm-completion-style' settings have no effect here,
-`emacs' being used inconditionally as value."
-  (lambda ()
-    (let* (;; Force usage of emacs style otherwise
-           ;; helm--prepare-completion-styles will reset
-           ;; completion-styles to default value i.e. (basic partial
-           ;; emacs22).
-           (helm-completion-style 'emacs)
-           (completion-styles
-            (helm--prepare-completion-styles nomode styles))
-           (completion-flex-nospace t)
-           (nosort (eq metadata 'nosort))
-           (compsfn (lambda (str pred _action)
-                      (let* ((completion-ignore-case (helm-set-case-fold-search))
-                             (comps (completion-all-completions
-                                     str
-                                     (if (functionp collection)
-                                         (funcall collection str pred t)
-                                       collection)
-                                     pred
-                                     (or point 0)
-                                     (or (and (listp metadata) metadata)
-                                         (setq metadata '(metadata)))))
-                             (last-data (last comps))
-                             (sort-fn (unless nosort
-                                        (completion-metadata-get
-                                         metadata 'display-sort-function)))
-                             all)
-                        (when (cdr last-data)
-                          (setcdr last-data nil))
-                        (setq all (copy-sequence comps))
-                        (if (and sort-fn (> (length str) 0))
-                            (funcall sort-fn all)
-                          all)))))
-      ;; Ensure circular objects are removed.
-      (complete-with-action t compsfn helm-pattern predicate))))
+(defun helm-guess-filename-at-point ()
+  (with-helm-current-buffer
+    ;; Ensure to disable the evil `ffap-machine-at-point' which may run here as
+    ;; `file-name-at-point-functions' contains by default
+    ;; `ffap-guess-file-name-at-point' See bug#2574.
+    ;; Use same value as in Emacs-29 for next 3 vars to ensure `ffap-machine-p'
+    ;; never ping.
+    (let ((ffap-machine-p-known 'accept)
+          (ffap-machine-p-local 'reject)
+          (ffap-machine-p-unknown 'reject))
+      (run-hook-with-args-until-success 'file-name-at-point-functions))))
 
 ;; Yank text at point.
 ;;
@@ -1557,6 +2313,7 @@ Also `helm-completion-style' settings have no effect here,
 (add-hook 'helm-cleanup-hook 'helm-reset-yank-point)
 (add-hook 'helm-after-initialize-hook 'helm-reset-yank-point)
 
+
 ;;; Ansi
 ;;
 ;;
@@ -1564,8 +2321,9 @@ Also `helm-completion-style' settings have no effect here,
   "\033\\[\\(K\\|[0-9;]*m\\)")
 (defvar helm--ansi-color-drop-regexp
   "\033\\[\\([ABCDsuK]\\|[12][JK]\\|=[0-9]+[hI]\\|[0-9;]*[Hf]\\)")
-(defun helm--ansi-color-apply (string)
-  "A version of `ansi-color-apply' immune to upstream changes.
+(with-suppressed-warnings ((obsolete ansi-color-apply-sequence))
+  (defun helm--ansi-color-apply (string)
+    "A version of `ansi-color-apply' immune to upstream changes.
 
 Similar to the emacs-24.5 version without support to
 `ansi-color-context' which is buggy in Emacs.
@@ -1576,43 +2334,41 @@ Modify also `ansi-color-regexp' by using own variable
 This is needed to provide compatibility for both emacs-25 and
 emacs-24.5 as emacs-25 version of `ansi-color-apply' is partially
 broken."
-  (require 'ansi-color)
-  (let ((start 0)
-        codes end escape-sequence
-        result colorized-substring)
-    ;; Find the next escape sequence.
-    (while (setq end (string-match helm--ansi-color-regexp string start))
-      (setq escape-sequence (match-string 1 string))
-      ;; Colorize the old block from start to end using old face.
+    (require 'ansi-color)
+    (let ((start 0)
+          codes end escape-sequence
+          result colorized-substring)
+      ;; Find the next escape sequence.
+      (while (setq end (string-match helm--ansi-color-regexp string start))
+        (setq escape-sequence (match-string 1 string))
+        ;; Colorize the old block from start to end using old face.
+        (when codes
+          (put-text-property
+           start end 'font-lock-face (ansi-color--find-face codes) string))
+        (setq colorized-substring (substring string start end)
+              start (match-end 0))
+        ;; Eliminate unrecognized ANSI sequences.
+        (while (string-match helm--ansi-color-drop-regexp colorized-substring)
+          (setq colorized-substring
+                (replace-match "" nil nil colorized-substring)))
+        (push colorized-substring result)
+        ;; Create new face, by applying escape sequence parameters.
+        (setq codes (ansi-color-apply-sequence escape-sequence codes)))
+      ;; If the rest of the string should have a face, put it there.
       (when codes
         (put-text-property
-         start end 'font-lock-face (ansi-color--find-face codes) string))
-      (setq colorized-substring (substring string start end)
-            start (match-end 0))
-      ;; Eliminate unrecognized ANSI sequences.
-      (while (string-match helm--ansi-color-drop-regexp colorized-substring)
-        (setq colorized-substring
-              (replace-match "" nil nil colorized-substring)))
-      (push colorized-substring result)
-      ;; Create new face, by applying escape sequence parameters.
-      (setq codes (ansi-color-apply-sequence escape-sequence codes)))
-    ;; If the rest of the string should have a face, put it there.
-    (when codes
-      (put-text-property
-       start (length string)
-       'font-lock-face (ansi-color--find-face codes) string))
-    ;; Save the remainder of the string to the result.
-    (if (string-match "\033" string start)
-        (push (substring string start (match-beginning 0)) result)
+         start (length string)
+         'font-lock-face (ansi-color--find-face codes) string))
+      ;; Save the remainder of the string to the result.
+      (if (string-match "\033" string start)
+          (push (substring string start (match-beginning 0)) result)
         (push (substring string start) result))
-    (apply 'concat (nreverse result))))
+      (apply 'concat (nreverse result)))))
+
+(when (< emacs-major-version 26)
+  (advice-add 'ansi-color-apply :override #'helm--ansi-color-apply))
+
 
 (provide 'helm-lib)
 
-;; Local Variables:
-;; byte-compile-warnings: (not obsolete)
-;; coding: utf-8
-;; indent-tabs-mode: nil
-;; End:
-
-;;; helm-lib ends here
+;;; helm-lib.el ends here

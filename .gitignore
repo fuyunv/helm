@@ -1,8 +1,4 @@
 *.elc
-patch*
-*.patch
-*.diff
-Home.md
 TAGS
-helm-autoloads.el
-ID
+/helm-autoloads.el
+/helm-core-autoloads.el
